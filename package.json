@@ -1,0 +1,16 @@
+{
+  "name": "tele-split-money",
+  "version": "1.0.0",
+  "description": "Telegram bot and mini app for splitting money",
+  "private": true,
+  "workspaces": [
+    "bot",
+    "webapp"
+  ],
+  "scripts": {
+    "dev:bot": "npm run dev --workspace=bot",
+    "dev:webapp": "npm run dev --workspace=webapp",
+    "build:bot": "npm run build --workspace=bot",
+    "build:webapp": "npm run build --workspace=webapp"
+  }
+}
