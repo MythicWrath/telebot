@@ -22,3 +22,4 @@ I want to make a Telegram bot/miniapp that can split money between users. The bo
     - Maybe automatic currency conversion should be in premium tier?
     - Links for quick payment settlement through Google Pay and WeChat Pay?
 - Smart defaulting of currency: Best guess of the currency of an expense based on the user's local timezone/location (e.g., retrieving from Telegram WebApp initData or navigator API).
+- Refactoring of backend to separate business logic from platform-dependent code (e.g., Supabase) to enable easy platform switching in the future.
