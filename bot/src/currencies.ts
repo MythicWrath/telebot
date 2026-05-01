@@ -26,7 +26,7 @@ export async function getExchangeRates(): Promise<Record<string, number>> {
         // 2. We don't have them, or there was an error. Fetch from public API.
         console.log(`Fetching fresh exchange rates for ${today}...`);
         // We use exchange-rate-api.com which provides a free tier without keys for open endpoints
-        const response = await axios.get('https://open.er-api.com/v6/latest/USD');
+        const response = await axios.get('https://open.er-api.com/v6/latest/SGD');
 
         if (response.data && response.data.rates) {
             const rates = response.data.rates;
@@ -34,7 +34,7 @@ export async function getExchangeRates(): Promise<Record<string, number>> {
             // 3. Cache the new rates in the database
             await supabase.from('exchange_rates').upsert({
                 date: today,
-                base_currency: 'USD',
+                base_currency: 'SGD',
                 rates: rates
             });
 
@@ -46,13 +46,13 @@ export async function getExchangeRates(): Promise<Record<string, number>> {
     } catch (err) {
         console.error('Failed to get exchange rates:', err);
         // Fallback to 1:1 if everything fails so the app doesn't crash
-        return { 'USD': 1 };
+        return { 'SGD': 1 };
     }
 }
 
 /**
  * Converts an amount from one currency to another using the exchange rates.
- * Because all our rates are relative to base USD, we do: amount * (targetRate / sourceRate)
+ * Because all our rates are relative to base SGD, we do: amount * (targetRate / sourceRate)
  */
 export function convertCurrency(amount: number, fromCurrency: string, toCurrency: string, rates: Record<string, number>): number {
     if (fromCurrency === toCurrency) return amount;
@@ -65,7 +65,7 @@ export function convertCurrency(amount: number, fromCurrency: string, toCurrency
         return amount;
     }
 
-    // Convert to USD first, then to target currency
-    const amountInUSD = amount / sourceRate;
-    return amountInUSD * targetRate;
+    // Convert to base currency first, then to target currency
+    const amountInBase = amount / sourceRate;
+    return amountInBase * targetRate;
 }
