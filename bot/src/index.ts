@@ -3,6 +3,7 @@ import express from 'express';
 import cors from 'cors';
 import * as dotenv from 'dotenv';
 import * as path from 'path';
+import crypto from 'crypto';
 import { supabase } from './db';
 
 // Load .env from the root of the project
@@ -20,6 +21,142 @@ app.use(cors());
 app.use(express.json());
 
 const isDev = process.env.NODE_ENV !== 'production';
+
+// --- Telegram InitData Validation & Extraction ---
+interface TelegramUser {
+    id: number;
+    first_name: string;
+    last_name?: string;
+    username?: string;
+    language_code?: string;
+    is_premium?: boolean;
+}
+
+interface ValidatedInitData {
+    query_id?: string;
+    user?: TelegramUser;
+    receiver?: any;
+    chat?: any;
+    chat_type?: string;
+    chat_instance?: string;
+    start_param?: string;
+    auth_date: number;
+    hash: string;
+}
+
+function parseAndValidateInitData(initDataStr: string, token: string): { isValid: boolean; data?: ValidatedInitData } {
+    try {
+        const params = new URLSearchParams(initDataStr);
+        const hash = params.get('hash');
+        if (!hash) {
+            return { isValid: false };
+        }
+
+        params.delete('hash');
+
+        const keys = Array.from(params.keys()).sort();
+        const dataCheckString = keys
+            .map(key => `${key}=${params.get(key)}`)
+            .join('\n');
+
+        const secretKey = crypto
+            .createHmac('sha256', 'WebAppData')
+            .update(token)
+            .digest();
+
+        const calculatedHash = crypto
+            .createHmac('sha256', secretKey)
+            .update(dataCheckString)
+            .digest('hex');
+
+        if (calculatedHash !== hash) {
+            return { isValid: false };
+        }
+
+        const result: any = {};
+        for (const [key, value] of params.entries()) {
+            if (key === 'user' || key === 'chat' || key === 'receiver') {
+                result[key] = JSON.parse(value);
+            } else if (key === 'auth_date') {
+                result[key] = parseInt(value, 10);
+            } else {
+                result[key] = value;
+            }
+        }
+
+        // Prevent replay attacks (24 hours expiration check in production)
+        const now = Math.floor(Date.now() / 1000);
+        if (!isDev && (now - result.auth_date > 86400)) {
+            console.warn('initData expired by', now - result.auth_date, 'seconds');
+            return { isValid: false };
+        }
+
+        return { isValid: true, data: result as ValidatedInitData };
+    } catch (error) {
+        console.error('Error validating initData:', error);
+        return { isValid: false };
+    }
+}
+
+// Middleware to validate Telegram Web App initData
+const validateTelegramInitData = async (req: any, res: any, next: () => void) => {
+    const initDataStr = req.headers['x-telegram-init-data'] as string;
+
+    if (!initDataStr) {
+        if (isDev) {
+            // Bypass in development if header is missing
+            req.telegramUser = { id: 111111111, first_name: 'TestUser1' };
+            return next();
+        }
+        return res.status(401).json({ error: 'Missing Telegram authorization header' });
+    }
+
+    const { isValid, data } = parseAndValidateInitData(initDataStr, botToken);
+
+    if (!isValid || !data) {
+        return res.status(401).json({ error: 'Invalid Telegram authorization' });
+    }
+
+    req.telegramUser = data.user;
+    req.initDataPayload = data;
+    next();
+};
+
+// Middleware to verify group membership
+const requireGroupAccess = async (req: any, res: any, next: () => void) => {
+    try {
+        const groupId = parseInt(req.params.groupId || req.body.groupId, 10);
+        const userId = req.telegramUser?.id;
+
+        if (isDev && !req.headers['x-telegram-init-data']) {
+            // Bypass group membership check in dev if not using real initData
+            return next();
+        }
+
+        if (!groupId || !userId) {
+            return res.status(400).json({ error: 'Missing Group ID or User ID' });
+        }
+
+        // Query Supabase to see if the user is a member of the group
+        const { data: membership, error } = await supabase
+            .from('group_members')
+            .select('*')
+            .eq('group_id', groupId)
+            .eq('user_id', userId)
+            .maybeSingle();
+
+        if (error) throw error;
+
+        if (!membership) {
+            return res.status(403).json({ error: 'Access denied: You are not a member of this group' });
+        }
+
+        next();
+    } catch (e: any) {
+        console.error('Group access verification failed:', e);
+        res.status(500).json({ error: 'Internal server error verifying group access' });
+    }
+};
 
 async function seedMockData() {
     if (!isDev) return;
@@ -89,6 +226,92 @@ bot.help((ctx) => {
     ctx.reply('To use me, add me to a group chat and use the /split command or open the Mini App.');
 });
 
+// User command: /split - Get the link to open the Mini App in this group
+bot.command('split', async (ctx) => {
+    const chat = ctx.chat;
+    if (!chat || (chat.type !== 'group' && chat.type !== 'supergroup')) {
+        return ctx.reply('This command can only be used in a group chat.');
+    }
+    const botUsername = ctx.botInfo.username;
+    // Note: 'app' is the default short name placeholder. Change this link if your short name is different.
+    const link = `https://t.me/${botUsername}/app?startapp=${chat.id}`;
+    
+    ctx.reply(
+        `💵 *Tele Split Money*\n\n` +
+        `Ready to split expenses in this group chat? Click the button below to open the Mini App!\n\n` +
+        `Group ID: \`${chat.id}\``,
+        {
+            parse_mode: 'Markdown',
+            reply_markup: {
+                inline_keyboard: [
+                    [
+                        {
+                            text: '🚀 Open Mini App',
+                            url: link
+                        }
+                    ]
+                ]
+            }
+        }
+    );
+});
+// --- Admin Whitelisting Middleware ---
+// Checks that the sender is a group creator or administrator before proceeding.
+// Usage: bot.command('mycommand', requireGroupAdmin, handler)
+const requireGroupAdmin = async (ctx: any, next: () => Promise<void>) => {
+    const chat = ctx.chat;
+    const user = ctx.from;
+
+    if (!chat || !user) {
+        return ctx.reply('This command can only be used in a group chat.');
+    }
+
+    if (chat.type !== 'group' && chat.type !== 'supergroup') {
+        return ctx.reply('This command can only be used in a group chat.');
+    }
+
+    try {
+        const member = await ctx.telegram.getChatMember(chat.id, user.id);
+        const isAdmin = member.status === 'creator' || member.status === 'administrator';
+
+        if (!isAdmin) {
+            return ctx.reply('⛔ This command is restricted to group admins only.');
+        }
+    } catch (e) {
+        console.error('Failed to verify admin status:', e);
+        return ctx.reply('Could not verify your admin status. Please try again.');
+    }
+
+    return next();
+};
+
+// Admin-only: Clear all expenses and settlements for this group
+bot.command('clear', requireGroupAdmin, async (ctx) => {
+    const groupId = ctx.chat?.id;
+    if (!groupId) return;
+
+    try {
+        // Fetch all expense IDs for this group first (to cascade delete splits)
+        const { data: expenses } = await supabase
+            .from('expenses')
+            .select('id')
+            .eq('group_id', groupId);
+
+        if (expenses && expenses.length > 0) {
+            const expenseIds = expenses.map((e: any) => e.id);
+            await supabase.from('expense_splits').delete().in('expense_id', expenseIds);
+        }
+
+        await supabase.from('expenses').delete().eq('group_id', groupId);
+        await supabase.from('settlements').delete().eq('group_id', groupId);
+
+        ctx.reply('🗑️ All expenses and settlements for this group have been cleared.');
+    } catch (e: any) {
+        console.error('Failed to clear group data:', e);
+        ctx.reply('❌ Failed to clear data: ' + e.message);
+    }
+});
+
 // Middleware for tracking groups
 bot.on('message', async (ctx, next) => {
     const chat = ctx.chat;
@@ -119,7 +342,7 @@ bot.on('message', async (ctx, next) => {
 });
 
 // API endpoint for fetching group members
-app.get('/api/groups/:groupId/members', async (req, res) => {
+app.get('/api/groups/:groupId/members', validateTelegramInitData, requireGroupAccess, async (req, res) => {
     try {
         const groupId = req.params.groupId;
 
@@ -149,25 +372,19 @@ app.get('/api/groups/:groupId/members', async (req, res) => {
 });
 
 // API endpoint for the React Mini App
-app.post('/api/expenses', async (req, res) => {
+app.post('/api/expenses', validateTelegramInitData, requireGroupAccess, async (req: any, res) => {
     try {
-        const { initData, amount, currency, description, groupId, paidBy, splitWith } = req.body;
+        const { amount, currency, description, groupId, paidBy, splitWith } = req.body;
 
-        // TODO(Production): We MUST validate `initData` hash using our TELEGRAM_BOT_TOKEN
-        // For now, we assume frontend validation or extract mock data.
+        let targetGroupId = groupId || (req.initDataPayload?.start_param ? parseInt(req.initDataPayload.start_param, 10) : null);
+        let actualPaidBy = paidBy || req.telegramUser?.id;
 
-        let targetGroupId = groupId;
-        let actualPaidBy = paidBy;
-
-        if (process.env.NODE_ENV !== 'production') {
-            targetGroupId = groupId || -100123456789;
+        if (isDev && !req.headers['x-telegram-init-data']) {
+            targetGroupId = targetGroupId || -100123456789;
             if (!actualPaidBy) {
                 const { data: testUser } = await supabase.from('users').select('telegram_id').limit(1).single();
                 actualPaidBy = testUser?.telegram_id || 111111111;
             }
-        } else {
-            // TODO(Production): Extract accurate group ID and user ID from `initData` payload instead of mocked IDs
-            // return res.status(501).json({ error: 'Production initData validation is not yet implemented' });
         }
 
         if (!targetGroupId || !actualPaidBy) {
@@ -243,7 +460,7 @@ app.post('/api/expenses', async (req, res) => {
 });
 
 // API endpoint for settling debts
-app.post('/api/settlements', async (req, res) => {
+app.post('/api/settlements', validateTelegramInitData, requireGroupAccess, async (req, res) => {
     try {
         const { groupId, paidBy, paidTo, amount, currency } = req.body;
 
@@ -282,7 +499,7 @@ app.post('/api/settlements', async (req, res) => {
 });
 
 // API endpoint for getting group balances
-app.get('/api/groups/:groupId/balances', async (req, res) => {
+app.get('/api/groups/:groupId/balances', validateTelegramInitData, requireGroupAccess, async (req, res) => {
     try {
         const groupId = req.params.groupId;
 
@@ -424,14 +641,25 @@ app.get('/api/groups/:groupId/balances', async (req, res) => {
     }
 });
 
+// Webhook endpoint — Telegram POSTs updates here in production
+app.post('/api/webhook', (req, res) => {
+    bot.handleUpdate(req.body, res);
+});
+
 // Enable graceful stop
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
 
-const PORT = 3000;
-app.listen(PORT, () => {
-    console.log(`Backend API running on http://localhost:${PORT}`);
-    bot.launch().then(() => {
-        console.log('Bot started successfully!');
+if (isDev) {
+    // In dev: run a persistent server with long-polling
+    const PORT = 3000;
+    app.listen(PORT, () => {
+        console.log(`Backend API running on http://localhost:${PORT}`);
+        bot.launch().then(() => {
+            console.log('Bot started successfully (long-polling)!');
+        });
     });
-});
+}
+
+// Export the Express app for Vercel serverless
+module.exports = app;

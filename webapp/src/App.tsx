@@ -3,6 +3,13 @@ import WebApp from '@twa-dev/sdk'
 import axios from 'axios'
 import './index.css'
 
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:3000';
+
+// Automatically attach Telegram Web App initData as header for backend verification
+if (WebApp.initData) {
+  axios.defaults.headers.common['x-telegram-init-data'] = WebApp.initData;
+}
+
 function App() {
   const [activeTab, setActiveTab] = useState<'add' | 'balances'>('add')
   const [amount, setAmount] = useState('')
@@ -25,7 +32,7 @@ function App() {
       setIsLoadingMembers(true);
       try {
         const groupId = WebApp.initDataUnsafe?.start_param || -100123456789;
-        const response = await axios.get(`http://127.0.0.1:3000/api/groups/${groupId}/members`);
+        const response = await axios.get(`${API_BASE_URL}/api/groups/${groupId}/members`);
         if (response.data && response.data.members) {
           const fetchedMembers = response.data.members;
           setMembers(fetchedMembers);
@@ -60,7 +67,7 @@ function App() {
           // TODO(Production): Get real group ID from initData
           const groupId = WebApp.initDataUnsafe?.start_param || -100123456789;
 
-          const response = await axios.get(`http://127.0.0.1:3000/api/groups/${groupId}/balances`);
+          const response = await axios.get(`${API_BASE_URL}/api/groups/${groupId}/balances`);
           if (response.data && response.data.balances) {
             setBalances(response.data.balances);
           }
@@ -95,7 +102,7 @@ function App() {
 
       try {
         // Send to our Node.js Backend API
-        await axios.post('http://127.0.0.1:3000/api/expenses', {
+        await axios.post(`${API_BASE_URL}/api/expenses`, {
           initData: WebApp.initData,
           amount: amount,
           currency: currency,
