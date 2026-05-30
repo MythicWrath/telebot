@@ -17,6 +17,8 @@ I want to make a Telegram bot/miniapp that can split money between users. The bo
 ### Future
 - Subscription to the bot (weekly and yearly)
     - Does it make sense to base the cost on number of users in a group chat?
+    - I am thinking of this scenario: The current most popular app for splitting money is Splitwise. It has a free tier that comes with limits on number of expenses that you can submit. Then the paid tier is an expensive yearly subscription, which doesn't make sense if I just use it intensively for a short period of time (e.g. for trips), while barely using it the rest of the year
+    - Therefore, I am thinking of offering cheap one time passes (e.g. $2 per person for 1 week), so it's a cheap low friction, pay-as-you-need way of getting people to purchase premium tiers. Subscription tiers could also include more functionality
 - What should subscription include?
     - Ads in free tier vs no ads in premium tier?
     - Maybe automatic currency conversion should be in premium tier?
