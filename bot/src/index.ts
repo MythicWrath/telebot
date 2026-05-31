@@ -419,10 +419,62 @@ bot.command('clear', requireGroupAdmin, async (ctx) => {
     }
 });
 
-// Middleware for tracking groups — registers any user who sends a message
+// Admin-only: /addmember <user_id> [optional display name]
+// Lets an admin register a group member without them needing to send a message.
+// Get a user's Telegram ID by forwarding their message to @userinfobot.
+bot.command('addmember', requireGroupAdmin, async (ctx) => {
+    const chat = ctx.chat;
+    if (!chat) return;
+
+    const args = ctx.message.text.split(/\s+/).slice(1);
+    const rawId = args[0];
+    const customName = args.slice(1).join(' ').trim();
+
+    if (!rawId || isNaN(Number(rawId))) {
+        return ctx.reply(
+            '❌ Usage: /addmember <telegram_user_id> [optional name]\n\n' +
+            'To find someone\'s Telegram ID: forward any of their messages to @userinfobot.'
+        );
+    }
+
+    const targetUserId = parseInt(rawId, 10);
+
+    try {
+        // Verify the user is actually in the group
+        const member = await ctx.telegram.getChatMember(chat.id, targetUserId);
+        const validStatuses = ['creator', 'administrator', 'member', 'restricted'];
+        if (!validStatuses.includes(member.status)) {
+            return ctx.reply(`❌ User ${targetUserId} is not a member of this group (status: ${member.status}).`);
+        }
+
+        const user = member.user;
+        const displayName = customName || user.first_name;
+
+        await registerGroupMember(
+            user.id,
+            displayName,
+            user.username,
+            user.language_code,
+            chat.id
+        );
+
+        ctx.reply(`✅ ${displayName} has been added to the expense tracker!`);
+    } catch (e: any) {
+        console.error('addmember failed:', e);
+        if (e.description?.includes('user not found')) {
+            ctx.reply(`❌ Could not find user ${targetUserId}. Make sure the ID is correct and they are in this group.`);
+        } else {
+            ctx.reply(`❌ Failed to add member: ${e.message}`);
+        }
+    }
+});
+
+// Middleware for tracking groups — registers any user who sends a message,
+// and also registers the original sender if a message is forwarded into the group.
 bot.on('message', async (ctx, next) => {
     const chat = ctx.chat;
     const user = ctx.from;
+    const msg = ctx.message as any;
 
     if (chat && (chat.type === 'group' || chat.type === 'supergroup')) {
         await supabase.from('groups').upsert({
@@ -430,8 +482,19 @@ bot.on('message', async (ctx, next) => {
             title: chat.title || 'Unknown Group'
         });
 
+        // Register the sender
         if (user) {
             await registerGroupMember(user.id, user.first_name, user.username, user.language_code, chat.id);
+        }
+
+        // If this is a forwarded message and the original sender's identity is visible,
+        // register them too — lets admins add members by forwarding their messages.
+        if (msg.forward_from && !msg.forward_from.is_bot) {
+            const fwd = msg.forward_from;
+            await registerGroupMember(fwd.id, fwd.first_name, fwd.username, fwd.language_code, chat.id);
+            ctx.reply(
+                `👤 ${fwd.first_name} has been registered in the expense tracker from a forwarded message!`,
+            );
         }
     }
 
