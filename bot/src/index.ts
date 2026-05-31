@@ -239,7 +239,7 @@ bot.command('split', async (ctx) => {
     ctx.reply(
         `💵 *Tele Split Money*\n\n` +
         `Ready to split expenses in this group chat? Click the button below to open the Mini App!\n\n` +
-        `Group ID: \`${chat.id}\``,
+        `💡 _If group members are missing from the app, use /sync to register everyone._`,
         {
             parse_mode: 'Markdown',
             reply_markup: {
@@ -254,6 +254,102 @@ bot.command('split', async (ctx) => {
             }
         }
     );
+});
+
+// Helper: upsert a user + add them to a group in the DB
+async function registerGroupMember(userId: number, firstName: string, username: string | undefined, languageCode: string | undefined, groupId: number) {
+    await supabase.from('users').upsert({
+        telegram_id: userId,
+        first_name: firstName,
+        username: username,
+        language_code: languageCode
+    });
+    await supabase.from('group_members').upsert({
+        group_id: groupId,
+        user_id: userId
+    });
+}
+
+// Track members when they join (or when the bot is added to a group)
+bot.on('new_chat_members', async (ctx) => {
+    const chat = ctx.chat;
+    const newMembers = ctx.message.new_chat_members;
+
+    if (!chat || !newMembers) return;
+
+    // Upsert group record first
+    await supabase.from('groups').upsert({
+        chat_id: chat.id,
+        title: (chat as any).title || 'Unknown Group'
+    });
+
+    for (const member of newMembers) {
+        if (member.is_bot) continue; // Skip bots
+        await registerGroupMember(
+            member.id,
+            member.first_name,
+            member.username,
+            member.language_code,
+            chat.id
+        );
+        console.log(`Registered new member ${member.first_name} (${member.id}) in group ${chat.id}`);
+    }
+});
+
+// /sync command: registers admins immediately and prompts all members to self-register
+bot.command('sync', async (ctx) => {
+    const chat = ctx.chat;
+    if (!chat || (chat.type !== 'group' && chat.type !== 'supergroup')) {
+        return ctx.reply('This command can only be used in a group chat.');
+    }
+
+    try {
+        // Ensure group exists in DB
+        await supabase.from('groups').upsert({
+            chat_id: chat.id,
+            title: chat.title || 'Unknown Group'
+        });
+
+        // Register the person running /sync right now
+        const caller = ctx.from;
+        if (caller) {
+            await registerGroupMember(caller.id, caller.first_name, caller.username, caller.language_code, chat.id);
+        }
+
+        // Fetch and register all admins (this is what Telegram Bot API allows)
+        const admins = await ctx.telegram.getChatAdministrators(chat.id);
+        let registeredAdmins = 0;
+        for (const admin of admins) {
+            if (admin.user.is_bot) continue;
+            await registerGroupMember(
+                admin.user.id,
+                admin.user.first_name,
+                admin.user.username,
+                admin.user.language_code,
+                chat.id
+            );
+            registeredAdmins++;
+        }
+
+        // Check how many members are now registered
+        const { data: members } = await supabase
+            .from('group_members')
+            .select('user_id')
+            .eq('group_id', chat.id);
+        const registeredCount = members?.length || 0;
+
+        await ctx.reply(
+            `✅ Sync complete!\n\n` +
+            `• *${registeredAdmins}* admin(s) registered automatically\n` +
+            `• *${registeredCount}* member(s) total in the app\n\n` +
+            `📣 *Action needed for non-admin members:*\n` +
+            `Anyone not yet in the app needs to send one message here (e.g. say hi or type /start\@${ctx.botInfo.username}) to register themselves.`,
+            { parse_mode: 'Markdown' }
+        );
+    } catch (e: any) {
+        console.error('Sync failed:', e);
+        ctx.reply('❌ Sync failed: ' + e.message);
+    }
 });
 // --- Admin Whitelisting Middleware ---
 // Checks that the sender is a group creator or administrator before proceeding.
@@ -312,7 +408,7 @@ bot.command('clear', requireGroupAdmin, async (ctx) => {
     }
 });
 
-// Middleware for tracking groups
+// Middleware for tracking groups — registers any user who sends a message
 bot.on('message', async (ctx, next) => {
     const chat = ctx.chat;
     const user = ctx.from;
@@ -324,17 +420,7 @@ bot.on('message', async (ctx, next) => {
         });
 
         if (user) {
-            await supabase.from('users').upsert({
-                telegram_id: user.id,
-                first_name: user.first_name,
-                username: user.username,
-                language_code: user.language_code
-            });
-
-            await supabase.from('group_members').upsert({
-                group_id: chat.id,
-                user_id: user.id
-            });
+            await registerGroupMember(user.id, user.first_name, user.username, user.language_code, chat.id);
         }
     }
 
