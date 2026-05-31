@@ -49,8 +49,10 @@ function App() {
           // default splitWith to everyone
           setSplitWith(fetchedMembers.map((m: any) => m.id));
         }
-      } catch (e) {
+      } catch (e: any) {
         console.error("Failed to fetch members", e);
+        const errorDetail = e.response?.data?.error || e.message;
+        showAlert(`Failed to load group members: ${errorDetail}`);
       } finally {
         setIsLoadingMembers(false);
       }
@@ -71,9 +73,10 @@ function App() {
           if (response.data && response.data.balances) {
             setBalances(response.data.balances);
           }
-        } catch (error) {
+        } catch (error: any) {
           console.error("Failed to fetch balances", error);
-          showAlert("Could not load balances. Please try again later.");
+          const errorDetail = error.response?.data?.error || error.message;
+          showAlert(`Failed to fetch balances: ${errorDetail}`);
         } finally {
           setIsLoadingBalances(false);
         }

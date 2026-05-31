@@ -344,7 +344,7 @@ bot.on('message', async (ctx, next) => {
 // API endpoint for fetching group members
 app.get('/api/groups/:groupId/members', validateTelegramInitData, requireGroupAccess, async (req, res) => {
     try {
-        const groupId = req.params.groupId;
+        const groupId = parseInt(req.params.groupId, 10);
 
         const { data: groupMembers, error: membersError } = await supabase
             .from('group_members')
@@ -501,7 +501,7 @@ app.post('/api/settlements', validateTelegramInitData, requireGroupAccess, async
 // API endpoint for getting group balances
 app.get('/api/groups/:groupId/balances', validateTelegramInitData, requireGroupAccess, async (req, res) => {
     try {
-        const groupId = req.params.groupId;
+        const groupId = parseInt(req.params.groupId, 10);
 
         // 1. Fetch all expenses for this group
         const { data: expenses, error: expensesError } = await supabase
