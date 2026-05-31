@@ -340,11 +340,10 @@ bot.command('sync', async (ctx) => {
 
         await ctx.reply(
             `✅ Sync complete!\n\n` +
-            `• *${registeredAdmins}* admin(s) registered automatically\n` +
-            `• *${registeredCount}* member(s) total in the app\n\n` +
-            `📣 *Action needed for non-admin members:*\n` +
-            `Anyone not yet in the app needs to send one message here (e.g. say hi or type /start\@${ctx.botInfo.username}) to register themselves.`,
-            { parse_mode: 'Markdown' }
+            `• ${registeredAdmins} admin(s) registered automatically\n` +
+            `• ${registeredCount} member(s) total in the app\n\n` +
+            `📣 Action needed for non-admin members:\n` +
+            `Anyone not yet in the app needs to send one message in this group (e.g. say hi, or type /start@${ctx.botInfo.username}) to register themselves.`
         );
     } catch (e: any) {
         console.error('Sync failed:', e);
