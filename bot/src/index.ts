@@ -211,15 +211,27 @@ bot.start(async (ctx) => {
     const user = ctx.from;
     if (!user) return;
 
-    // Track the user in DB
-    await supabase.from('users').upsert({
-        telegram_id: user.id,
-        first_name: user.first_name,
-        username: user.username,
-        language_code: user.language_code
-    });
+    const chat = ctx.chat;
 
-    ctx.reply(`Welcome ${user.first_name}! I am a bot to help you split expenses. Add me to a group chat!`);
+    if (chat && (chat.type === 'group' || chat.type === 'supergroup')) {
+        // /start used inside a group — register user AND the group membership
+        // (bot.on('message') won't fire here since bot.start doesn't call next())
+        await supabase.from('groups').upsert({
+            chat_id: chat.id,
+            title: (chat as any).title || 'Unknown Group'
+        });
+        await registerGroupMember(user.id, user.first_name, user.username, user.language_code, chat.id);
+        ctx.reply(`Welcome ${user.first_name}! You've been registered in this group's expense tracker. Open the Mini App via /split to get started! 🎉`);
+    } else {
+        // /start in private chat — just register the user
+        await supabase.from('users').upsert({
+            telegram_id: user.id,
+            first_name: user.first_name,
+            username: user.username,
+            language_code: user.language_code
+        });
+        ctx.reply(`Welcome ${user.first_name}! I am a bot to help you split expenses. Add me to a group chat and use /start there to register!`);
+    }
 });
 
 bot.help((ctx) => {
