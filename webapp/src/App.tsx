@@ -17,6 +17,7 @@ function App() {
   const [description, setDescription] = useState('')
   const [paidBy, setPaidBy] = useState<number | ''>('')
   const [splitWith, setSplitWith] = useState<number[]>([])
+  const [currenciesList, setCurrenciesList] = useState<string[]>(['SGD', 'USD', 'EUR', 'GBP'])
 
   const [isLoading, setIsLoading] = useState(false)
 
@@ -58,6 +59,21 @@ function App() {
       }
     };
     fetchMembers();
+  }, []);
+
+  // Fetch currencies list on load
+  useEffect(() => {
+    const fetchCurrencies = async () => {
+      try {
+        const response = await axios.get(`${API_BASE_URL}/api/currencies`);
+        if (response.data && response.data.currencies) {
+          setCurrenciesList(response.data.currencies);
+        }
+      } catch (e) {
+        console.error("Failed to fetch currencies", e);
+      }
+    };
+    fetchCurrencies();
   }, []);
 
   // Fetch balances when switching to the balances tab
@@ -174,16 +190,24 @@ function App() {
       </header>
 
       {/* Tabs */}
-      <div className="flex bg-black/5 p-1 rounded-xl">
+      <div className="flex bg-[var(--tg-theme-secondary-bg-color,#f4f4f5)] p-1 rounded-xl">
         <button
           onClick={() => setActiveTab('add')}
-          className={`flex-1 py-2 text-sm font-medium rounded-lg transition-colors ${activeTab === 'add' ? 'bg-white dark:bg-[#2c2c2e] shadow-sm' : 'opacity-60'}`}
+          className={`flex-1 py-2 text-sm font-medium rounded-lg transition-colors ${
+            activeTab === 'add'
+              ? 'bg-[var(--tg-theme-bg-color,#ffffff)] text-[var(--tg-theme-text-color,#000000)] shadow-sm'
+              : 'text-[var(--tg-theme-text-color,#000000)] opacity-60'
+          }`}
         >
           Add Expense
         </button>
         <button
           onClick={() => setActiveTab('balances')}
-          className={`flex-1 py-2 text-sm font-medium rounded-lg transition-colors ${activeTab === 'balances' ? 'bg-white dark:bg-[#2c2c2e] shadow-sm' : 'opacity-60'}`}
+          className={`flex-1 py-2 text-sm font-medium rounded-lg transition-colors ${
+            activeTab === 'balances'
+              ? 'bg-[var(--tg-theme-bg-color,#ffffff)] text-[var(--tg-theme-text-color,#000000)] shadow-sm'
+              : 'text-[var(--tg-theme-text-color,#000000)] opacity-60'
+          }`}
         >
           Group Balances
         </button>
@@ -191,7 +215,7 @@ function App() {
 
       {/* View: Add Expense */}
       {activeTab === 'add' && (
-        <div className="flex flex-col gap-4 bg-black/5 p-4 rounded-xl">
+        <div className="flex flex-col gap-4 bg-[var(--tg-theme-secondary-bg-color,#f4f4f5)] p-4 rounded-xl">
           <div className="flex gap-2">
             <div className="flex-1">
               <label className="block text-sm font-medium mb-1 opacity-80">Amount</label>
@@ -210,10 +234,9 @@ function App() {
                 onChange={(e) => setCurrency(e.target.value)}
                 className="w-full px-2 py-3 rounded-lg border-none bg-white dark:bg-black/20 h-[52px]"
               >
-                <option value="USD">USD</option>
-                <option value="EUR">EUR</option>
-                <option value="GBP">GBP</option>
-                <option value="SGD">SGD</option>
+                {currenciesList.map(c => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
               </select>
             </div>
           </div>
@@ -289,7 +312,7 @@ function App() {
           )}
 
           {!isLoadingBalances && balances.map(balance => (
-            <div key={balance.id} className="flex items-center justify-between bg-black/5 p-4 rounded-xl">
+            <div key={balance.id} className="flex items-center justify-between bg-[var(--tg-theme-secondary-bg-color,#f4f4f5)] p-4 rounded-xl">
               <div className="flex items-center gap-3">
                 <div className="w-8 h-8 rounded-full bg-blue-500/10 flex items-center justify-center text-blue-500">
                   <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>

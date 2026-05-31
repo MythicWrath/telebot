@@ -43,5 +43,5 @@
 - [ ] Code Refactoring: Separate business logic from platform-dependent code (e.g., Supabase) to enable easy platform switching in the future.
 
 ## User Feedback & UI Improvements
-- [ ] UI: Fix active tab color contrast in navbar (currently black text on dark grey is low visibility for color vision deficiency).
-- [ ] Features: Expand the frontend currency dropdown to support more currencies (the backend `currencies.ts` already fetches rates for over 100 currencies from open.er-api.com).
+- [x] UI: Fix active tab color contrast in navbar (currently black text on dark grey is low visibility for color vision deficiency).
+- [x] Features: Expand the frontend currency dropdown to support more currencies (the backend `currencies.ts` already fetches rates for over 100 currencies from open.er-api.com).

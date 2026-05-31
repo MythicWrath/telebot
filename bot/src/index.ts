@@ -367,6 +367,18 @@ app.get('/api/groups/:groupId/members', validateTelegramInitData, requireGroupAc
         res.json({ members });
     } catch (error: any) {
         console.error('Failed to fetch members:', error);
+    }
+});
+
+// API endpoint for fetching available currencies
+app.get('/api/currencies', async (req, res) => {
+    try {
+        const { getExchangeRates } = require('./currencies');
+        const rates = await getExchangeRates();
+        const currencies = Object.keys(rates).sort();
+        res.json({ currencies });
+    } catch (error: any) {
+        console.error('Failed to fetch currencies:', error);
         res.status(500).json({ error: error.message });
     }
 });
