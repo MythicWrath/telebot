@@ -430,14 +430,36 @@ bot.command('addmember', requireGroupAdmin, async (ctx) => {
     const rawId = args[0];
     const customName = args.slice(1).join(' ').trim();
 
-    if (!rawId || isNaN(Number(rawId))) {
+    if (!rawId) {
         return ctx.reply(
-            '❌ Usage: /addmember <telegram_user_id> [optional name]\n\n' +
-            'To find someone\'s Telegram ID: forward any of their messages to @userinfobot.'
+            '❌ Usage: /addmember <telegram_user_id_or_username> [optional name]\n\n' +
+            'You can use their @username if they have used the bot before. Otherwise, use their numeric ID (find it by forwarding their message to @userinfobot).'
         );
     }
 
-    const targetUserId = parseInt(rawId, 10);
+    let targetUserId: number;
+
+    if (isNaN(Number(rawId))) {
+        // Assume it's a username
+        const cleanUsername = rawId.startsWith('@') ? rawId.slice(1) : rawId;
+        const { data: userData } = await supabase
+            .from('users')
+            .select('telegram_id')
+            .eq('username', cleanUsername)
+            .maybeSingle();
+
+        if (!userData || !userData.telegram_id) {
+            return ctx.reply(
+                `❌ Could not find user @${cleanUsername} in the bot's database.\n\n` +
+                `*Why?* Telegram bots cannot search for random usernames for privacy reasons. They must have interacted with this bot somewhere before.\n\n` +
+                `*Fix:* Either have them send a message here, or use the **forwarding method** (forward one of their messages into this group).`,
+                { parse_mode: 'Markdown' }
+            );
+        }
+        targetUserId = userData.telegram_id;
+    } else {
+        targetUserId = parseInt(rawId, 10);
+    }
 
     try {
         // Verify the user is actually in the group
