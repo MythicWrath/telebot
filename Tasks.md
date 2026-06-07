@@ -17,6 +17,7 @@
   - [x] Add `vercel.json` to configure the bot as a serverless function
   - [x] Push to GitHub and deploy on Vercel (set env vars: `TELEGRAM_BOT_TOKEN`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `NODE_ENV=production`)
   - [x] Register the webhook URL with Telegram (`setWebhook` API call)
+- [ ] Implement update and delete expenses API/logic
 
 ## Mini App (Frontend)
 - [x] Bootstrap React + Vite App
@@ -25,6 +26,7 @@
 - [x] Build UI: Add Expense Form (Amount, Currency, Description, Paid By, Split With)
 - [x] Build UI: Group Balances View (Who owes whom)
 - [x] Deploy Mini App to Vercel
+- [ ] Build UI: Update and delete expenses
 
 ## Core Logic & Polish
 - [x] Implement Debt Simplification Algorithm
@@ -40,6 +42,7 @@
 ## Future Features
 - [ ] Smart currency defaulting (Guess currency based on user timezone/location).
 - [ ] Unequal splitting of expenses (e.g., exact amounts or percentages).
+- [ ] Group settings page: Build a tab for the group creator to set permissions (e.g., restrict editing/deleting expenses to just the creator vs anyone).
 - [ ] Code Refactoring: Separate business logic from platform-dependent code (e.g., Supabase) to enable easy platform switching in the future.
 
 ## User Feedback & UI Improvements

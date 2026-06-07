@@ -8,6 +8,7 @@ I want to make a Telegram bot/miniapp that can split money between users. The bo
 - Split money between users (chat and miniapp)
 - Split money between users with a custom split (chat and miniapp)
 - Simplify debts between users in a group chat, optimizing to minimize the number of transactions (chat and miniapp)
+- Allows updating and deleting expenses anytime before settling up
 - Converting currency based on latest exchange rates
 - Miniapp interface for splitting money and viewing current balances
 - Ability to restrict bots to certain groups by an admin (me) for testing and security
@@ -24,4 +25,5 @@ I want to make a Telegram bot/miniapp that can split money between users. The bo
     - Maybe automatic currency conversion should be in premium tier?
     - Links for quick payment settlement through Google Pay and WeChat Pay?
 - Smart defaulting of currency: Best guess of the currency of an expense based on the user's local timezone/location (e.g., retrieving from Telegram WebApp initData or navigator API).
+- Settings page/tab: Allow the group creator to configure settings (e.g., restricting who can edit/delete expenses to anyone vs. just the creator).
 - Refactoring of backend to separate business logic from platform-dependent code (e.g., Supabase) to enable easy platform switching in the future.

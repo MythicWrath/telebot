@@ -631,6 +631,231 @@ app.post('/api/expenses', validateTelegramInitData, requireGroupAccess, async (r
     }
 });
 
+// API endpoint for fetching group expenses
+app.get('/api/groups/:groupId/expenses', validateTelegramInitData, requireGroupAccess, async (req, res) => {
+    try {
+        const groupId = parseInt(req.params.groupId, 10);
+
+        // Fetch all expenses for this group, ordered by date descending
+        const { data: expenses, error: expensesError } = await supabase
+            .from('expenses')
+            .select(`
+                id,
+                amount,
+                currency,
+                description,
+                paid_by,
+                date
+            `)
+            .eq('group_id', groupId)
+            .order('date', { ascending: false });
+
+        if (expensesError) throw expensesError;
+
+        const expenseIds = expenses.map((e: any) => e.id);
+
+        // Fetch splits for these expenses
+        let expenseSplits: any[] = [];
+        if (expenseIds.length > 0) {
+            const { data: splits, error: splitsError } = await supabase
+                .from('expense_splits')
+                .select('expense_id, user_id, amount_owed')
+                .in('expense_id', expenseIds);
+
+            if (splitsError) throw splitsError;
+            expenseSplits = splits || [];
+        }
+
+        // Return expenses mapped with their splits
+        const expensesWithSplits = expenses.map(expense => {
+            const splits = expenseSplits.filter(s => s.expense_id === expense.id);
+            return {
+                id: expense.id,
+                amount: expense.amount,
+                currency: expense.currency,
+                description: expense.description,
+                paidBy: expense.paid_by,
+                date: expense.date,
+                splitWith: splits.map(s => s.user_id)
+            };
+        });
+
+        res.json({ expenses: expensesWithSplits });
+    } catch (error: any) {
+        console.error('Failed to fetch expenses:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// API endpoint for updating an expense
+app.put('/api/expenses/:expenseId', validateTelegramInitData, async (req: any, res) => {
+    try {
+        const { expenseId } = req.params;
+        const { amount, currency, description, paidBy, splitWith } = req.body;
+
+        // Fetch the expense to find its group ID
+        const { data: existingExpense, error: findError } = await supabase
+            .from('expenses')
+            .select('group_id')
+            .eq('id', expenseId)
+            .single();
+
+        if (findError || !existingExpense) {
+            return res.status(404).json({ error: 'Expense not found' });
+        }
+
+        const targetGroupId = existingExpense.group_id;
+
+        // Verify group membership
+        const userId = req.telegramUser?.id;
+        if (!isDev || req.headers['x-telegram-init-data']) {
+            const { data: membership } = await supabase
+                .from('group_members')
+                .select('*')
+                .eq('group_id', targetGroupId)
+                .eq('user_id', userId)
+                .maybeSingle();
+
+            if (!membership) {
+                return res.status(403).json({ error: 'Access denied: You are not a member of this group' });
+            }
+        }
+
+        // Update the expense
+        const { data: expense, error: updateError } = await supabase
+            .from('expenses')
+            .update({
+                paid_by: paidBy,
+                amount: parseFloat(amount),
+                currency: currency || 'SGD',
+                description: description
+            })
+            .eq('id', expenseId)
+            .select()
+            .single();
+
+        if (updateError) throw updateError;
+
+        // Update splits: delete old, insert new
+        const { error: deleteSplitsError } = await supabase
+            .from('expense_splits')
+            .delete()
+            .eq('expense_id', expenseId);
+
+        if (deleteSplitsError) throw deleteSplitsError;
+
+        const splitsToInsert = [];
+        if (splitWith && Array.isArray(splitWith) && splitWith.length > 0) {
+            const splitAmount = parseFloat(amount) / splitWith.length;
+            for (const memberId of splitWith) {
+                splitsToInsert.push({
+                    expense_id: expenseId,
+                    user_id: memberId,
+                    amount_owed: splitAmount
+                });
+            }
+        } else {
+            // Default evenly across group
+            const { data: groupMembers } = await supabase
+                .from('group_members')
+                .select('user_id')
+                .eq('group_id', targetGroupId);
+
+            if (groupMembers && groupMembers.length > 0) {
+                const splitAmount = parseFloat(amount) / groupMembers.length;
+                for (const member of groupMembers) {
+                    splitsToInsert.push({
+                        expense_id: expenseId,
+                        user_id: member.user_id,
+                        amount_owed: splitAmount
+                    });
+                }
+            }
+        }
+
+        if (splitsToInsert.length > 0) {
+            const { error: splitsError } = await supabase.from('expense_splits').insert(splitsToInsert);
+            if (splitsError) throw splitsError;
+        }
+
+        // Notify group
+        try {
+            await bot.telegram.sendMessage(
+                targetGroupId,
+                `✏️ Expense Updated: "${description}" is now ${currency || 'SGD'} ${amount}`
+            );
+        } catch (e) {
+            console.log('Could not send telegram message:', e);
+        }
+
+        res.json({ success: true, expense });
+    } catch (error: any) {
+        console.error('Failed to update expense:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// API endpoint for deleting an expense
+app.delete('/api/expenses/:expenseId', validateTelegramInitData, async (req: any, res) => {
+    try {
+        const { expenseId } = req.params;
+
+        // Fetch expense first to get group_id and details
+        const { data: existingExpense, error: findError } = await supabase
+            .from('expenses')
+            .select('group_id, description, amount, currency')
+            .eq('id', expenseId)
+            .single();
+
+        if (findError || !existingExpense) {
+            return res.status(404).json({ error: 'Expense not found' });
+        }
+
+        const targetGroupId = existingExpense.group_id;
+
+        // Verify group membership
+        const userId = req.telegramUser?.id;
+        if (!isDev || req.headers['x-telegram-init-data']) {
+            const { data: membership } = await supabase
+                .from('group_members')
+                .select('*')
+                .eq('group_id', targetGroupId)
+                .eq('user_id', userId)
+                .maybeSingle();
+
+            if (!membership) {
+                return res.status(403).json({ error: 'Access denied: You are not a member of this group' });
+            }
+        }
+
+        // Delete associated splits first (though DB schema has cascade, let's be explicit and safe)
+        await supabase.from('expense_splits').delete().eq('expense_id', expenseId);
+
+        // Delete expense
+        const { error: deleteError } = await supabase
+            .from('expenses')
+            .delete()
+            .eq('id', expenseId);
+
+        if (deleteError) throw deleteError;
+
+        // Notify group
+        try {
+            await bot.telegram.sendMessage(
+                targetGroupId,
+                `🗑️ Expense Deleted: "${existingExpense.description}" (${existingExpense.currency} ${existingExpense.amount})`
+            );
+        } catch (e) {
+            console.log('Could not send telegram message:', e);
+        }
+
+        res.json({ success: true });
+    } catch (error: any) {
+        console.error('Failed to delete expense:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // API endpoint for settling debts
 app.post('/api/settlements', validateTelegramInitData, requireGroupAccess, async (req, res) => {
     try {
