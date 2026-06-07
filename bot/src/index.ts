@@ -1025,7 +1025,9 @@ app.get('/api/groups/:groupId/balances', validateTelegramInitData, requireGroupA
         const humanReadableDebts = optimizedDebts.map((d: any, index: number) => ({
             id: index,
             from: userNames[d.from] || d.from,
+            fromId: Number(d.from),
             to: userNames[d.to] || d.to,
+            toId: Number(d.to),
             amount: d.amount,
             currency: 'SGD' // The output is currently normalized to SGD
         }));

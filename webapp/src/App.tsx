@@ -24,7 +24,7 @@ function App() {
   const [members, setMembers] = useState<{ id: number, name: string }[]>([])
   const [isLoadingMembers, setIsLoadingMembers] = useState(false)
 
-  const [balances, setBalances] = useState<{ id: number, from: string, to: string, amount: number, currency: string }[]>([])
+  const [balances, setBalances] = useState<{ id: number, from: string, fromId: number, to: string, toId: number, amount: number, currency: string }[]>([])
   const [isLoadingBalances, setIsLoadingBalances] = useState(false)
 
   interface Expense {
@@ -266,6 +266,19 @@ function App() {
       WebApp.MainButton.hide();
     }
   }, [activeTab, amount, description, paidBy, splitWith]);
+
+  const currentUserId = WebApp.initDataUnsafe?.user?.id;
+  let totalIOwe = 0;
+  let totalOwedToMe = 0;
+  balances.forEach(b => {
+    if (b.fromId === currentUserId) {
+      totalIOwe += b.amount;
+    }
+    if (b.toId === currentUserId) {
+      totalOwedToMe += b.amount;
+    }
+  });
+  const netBalance = totalOwedToMe - totalIOwe;
 
   return (
     <div className="min-h-screen p-4 flex flex-col gap-6">
@@ -517,7 +530,11 @@ function App() {
           {!isLoadingBalances && balances.length > 0 && (
             <div className="mt-2 p-4 bg-green-500/10 rounded-xl flex items-center gap-3 text-green-700 dark:text-green-400">
               <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v20"></path><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
-              <div className="text-sm text-left">Summary requires dynamic user lookup.</div>
+              <div className="text-sm text-left font-medium">
+                {netBalance > 0 && `You are owed a total of SGD ${netBalance.toFixed(2)}`}
+                {netBalance < 0 && `You owe a total of SGD ${Math.abs(netBalance).toFixed(2)}`}
+                {netBalance === 0 && `You are settled up, but there are other group debts.`}
+              </div>
             </div>
           )}
         </div>
