@@ -5,6 +5,8 @@ import * as dotenv from 'dotenv';
 import * as path from 'path';
 import crypto from 'crypto';
 import { supabase } from './db';
+import { sendTutorial, getTutorialPage } from './tutorial';
+
 
 // Load .env from the root of the project
 dotenv.config({ path: path.resolve(__dirname, '../../.env') });
@@ -223,20 +225,53 @@ bot.start(async (ctx) => {
         await registerGroupMember(user.id, user.first_name, user.username, user.language_code, chat.id);
         ctx.reply(`Welcome ${user.first_name}! You've been registered in this group's expense tracker. Open the Mini App via /split to get started! 🎉`);
     } else {
-        // /start in private chat — just register the user
+        // /start in private chat — just register the user and show tutorial
         await supabase.from('users').upsert({
             telegram_id: user.id,
             first_name: user.first_name,
             username: user.username,
             language_code: user.language_code
         });
-        ctx.reply(`Welcome ${user.first_name}! I am a bot to help you split expenses. Add me to a group chat and use /start there to register!`);
+        await sendTutorial(ctx);
     }
 });
 
 bot.help((ctx) => {
-    ctx.reply('To use me, add me to a group chat and use the /split command or open the Mini App.');
+    ctx.reply(
+        `💡 *Need help?*\n\n` +
+        `• Add me to a group chat and use /split to open the Mini App.\n` +
+        `• Use /tutorial to view our interactive step-by-step setup guide!`,
+        { parse_mode: 'Markdown' }
+    );
 });
+
+bot.command('tutorial', async (ctx) => {
+    await sendTutorial(ctx);
+});
+
+bot.action(/^tutorial:(.+)$/, async (ctx) => {
+    try {
+        const topic = ctx.match[1];
+        if (topic === 'close') {
+            await ctx.deleteMessage().catch(() => {});
+            await ctx.answerCbQuery('Tutorial closed.').catch(() => {});
+            return;
+        }
+
+        const botUsername = ctx.botInfo?.username || 'split_money_bot';
+        const page = getTutorialPage(topic, botUsername);
+
+        await ctx.editMessageText(page.text, {
+            parse_mode: 'Markdown',
+            reply_markup: page.reply_markup
+        });
+        await ctx.answerCbQuery().catch(() => {});
+    } catch (e) {
+        console.error('Error handling tutorial action:', e);
+        await ctx.answerCbQuery('Could not load page.').catch(() => {});
+    }
+});
+
 
 // User command: /split - Get the link to open the Mini App in this group
 bot.command('split', async (ctx) => {
