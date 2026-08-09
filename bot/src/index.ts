@@ -600,10 +600,71 @@ app.get('/api/currencies', async (req, res) => {
     }
 });
 
+// Helper function to calculate exact split amounts with penny rounding
+function computeExpenseSplits(
+    expenseId: string,
+    totalAmount: number,
+    paidByUserId: number,
+    splitsInput?: any[],
+    splitWithInput?: number[],
+    groupMembers?: any[]
+): { splitsToInsert: { expense_id: string; user_id: number; amount_owed: number }[]; error?: string } {
+    const totalCents = Math.round(totalAmount * 100);
+    let targetSplits: { userId: number; amountOwed: number }[] = [];
+
+    if (splitsInput && Array.isArray(splitsInput) && splitsInput.length > 0) {
+        targetSplits = splitsInput.map(s => ({
+            userId: Number(s.userId),
+            amountOwed: parseFloat(s.amountOwed) || 0
+        }));
+    } else if (splitWithInput && Array.isArray(splitWithInput) && splitWithInput.length > 0) {
+        const splitAmount = totalAmount / splitWithInput.length;
+        targetSplits = splitWithInput.map(userId => ({
+            userId: Number(userId),
+            amountOwed: splitAmount
+        }));
+    } else if (groupMembers && groupMembers.length > 0) {
+        const splitAmount = totalAmount / groupMembers.length;
+        targetSplits = groupMembers.map(member => ({
+            userId: Number(member.user_id),
+            amountOwed: splitAmount
+        }));
+    } else {
+        return { splitsToInsert: [] };
+    }
+
+    const splitCentsArray = targetSplits.map(s => Math.round(s.amountOwed * 100));
+    const sumCents = splitCentsArray.reduce((a, b) => a + b, 0);
+    const diffCents = totalCents - sumCents;
+
+    // Validation: if difference is larger than reasonable rounding error (e.g., > max(5, splits count))
+    if (Math.abs(diffCents) > Math.max(5, targetSplits.length)) {
+        return {
+            splitsToInsert: [],
+            error: `Splits total (${(sumCents / 100).toFixed(2)}) does not match expense amount (${totalAmount.toFixed(2)})`
+        };
+    }
+
+    // Penny rounding: assign remainder to payer if present in splits, else first split
+    if (diffCents !== 0 && targetSplits.length > 0) {
+        let payerIndex = targetSplits.findIndex(s => s.userId === paidByUserId);
+        if (payerIndex === -1) payerIndex = 0;
+        splitCentsArray[payerIndex] += diffCents;
+    }
+
+    const splitsToInsert = targetSplits.map((s, idx) => ({
+        expense_id: expenseId,
+        user_id: s.userId,
+        amount_owed: splitCentsArray[idx] / 100
+    }));
+
+    return { splitsToInsert };
+}
+
 // API endpoint for the React Mini App
 app.post('/api/expenses', validateTelegramInitData, requireGroupAccess, async (req: any, res) => {
     try {
-        const { amount, currency, description, groupId, paidBy, splitWith } = req.body;
+        const { amount, currency, description, groupId, paidBy, splitWith, splits } = req.body;
 
         let targetGroupId = groupId || (req.initDataPayload?.start_param ? parseInt(req.initDataPayload.start_param, 10) : null);
         let actualPaidBy = paidBy || req.telegramUser?.id;
@@ -620,13 +681,18 @@ app.post('/api/expenses', validateTelegramInitData, requireGroupAccess, async (r
             return res.status(400).json({ error: 'Missing group ID or User ID' });
         }
 
+        const parsedAmount = parseFloat(amount);
+        if (isNaN(parsedAmount) || parsedAmount <= 0) {
+            return res.status(400).json({ error: 'Invalid expense amount' });
+        }
+
         // Insert Expense
         const { data: expense, error: expenseError } = await supabase
             .from('expenses')
             .insert({
                 group_id: targetGroupId,
                 paid_by: actualPaidBy,
-                amount: parseFloat(amount),
+                amount: parsedAmount,
                 currency: currency || 'SGD',
                 description: description
             })
@@ -635,34 +701,28 @@ app.post('/api/expenses', validateTelegramInitData, requireGroupAccess, async (r
 
         if (expenseError) throw expenseError;
 
-        // Insert expense splits
-        const splitsToInsert = [];
-        if (splitWith && Array.isArray(splitWith) && splitWith.length > 0) {
-            const splitAmount = parseFloat(amount) / splitWith.length;
-            for (const userId of splitWith) {
-                splitsToInsert.push({
-                    expense_id: expense.id,
-                    user_id: userId,
-                    amount_owed: splitAmount
-                });
-            }
-        } else {
-            // Default evenly across group
-            const { data: groupMembers } = await supabase
+        // Determine group members if needed
+        let groupMembers: any[] = [];
+        if ((!splits || splits.length === 0) && (!splitWith || splitWith.length === 0)) {
+            const { data: members } = await supabase
                 .from('group_members')
                 .select('user_id')
                 .eq('group_id', targetGroupId);
+            groupMembers = members || [];
+        }
 
-            if (groupMembers && groupMembers.length > 0) {
-                const splitAmount = parseFloat(amount) / groupMembers.length;
-                for (const member of groupMembers) {
-                    splitsToInsert.push({
-                        expense_id: expense.id,
-                        user_id: member.user_id,
-                        amount_owed: splitAmount
-                    });
-                }
-            }
+        const { splitsToInsert, error: splitCalculationError } = computeExpenseSplits(
+            expense.id,
+            parsedAmount,
+            actualPaidBy,
+            splits,
+            splitWith,
+            groupMembers
+        );
+
+        if (splitCalculationError) {
+            await supabase.from('expenses').delete().eq('id', expense.id);
+            return res.status(400).json({ error: splitCalculationError });
         }
 
         if (splitsToInsert.length > 0) {
@@ -733,7 +793,8 @@ app.get('/api/groups/:groupId/expenses', validateTelegramInitData, requireGroupA
                 description: expense.description,
                 paidBy: expense.paid_by,
                 date: expense.date,
-                splitWith: splits.map(s => s.user_id)
+                splitWith: splits.map(s => s.user_id),
+                splits: splits.map(s => ({ userId: s.user_id, amountOwed: s.amount_owed }))
             };
         });
 
@@ -748,7 +809,7 @@ app.get('/api/groups/:groupId/expenses', validateTelegramInitData, requireGroupA
 app.put('/api/expenses/:expenseId', validateTelegramInitData, async (req: any, res) => {
     try {
         const { expenseId } = req.params;
-        const { amount, currency, description, paidBy, splitWith } = req.body;
+        const { amount, currency, description, paidBy, splitWith, splits } = req.body;
 
         // Fetch the expense to find its group ID
         const { data: existingExpense, error: findError } = await supabase
@@ -778,12 +839,17 @@ app.put('/api/expenses/:expenseId', validateTelegramInitData, async (req: any, r
             }
         }
 
+        const parsedAmount = parseFloat(amount);
+        if (isNaN(parsedAmount) || parsedAmount <= 0) {
+            return res.status(400).json({ error: 'Invalid expense amount' });
+        }
+
         // Update the expense
         const { data: expense, error: updateError } = await supabase
             .from('expenses')
             .update({
                 paid_by: paidBy,
-                amount: parseFloat(amount),
+                amount: parsedAmount,
                 currency: currency || 'SGD',
                 description: description
             })
@@ -793,6 +859,29 @@ app.put('/api/expenses/:expenseId', validateTelegramInitData, async (req: any, r
 
         if (updateError) throw updateError;
 
+        // Compute new splits
+        let groupMembers: any[] = [];
+        if ((!splits || splits.length === 0) && (!splitWith || splitWith.length === 0)) {
+            const { data: members } = await supabase
+                .from('group_members')
+                .select('user_id')
+                .eq('group_id', targetGroupId);
+            groupMembers = members || [];
+        }
+
+        const { splitsToInsert, error: splitCalculationError } = computeExpenseSplits(
+            expenseId,
+            parsedAmount,
+            paidBy,
+            splits,
+            splitWith,
+            groupMembers
+        );
+
+        if (splitCalculationError) {
+            return res.status(400).json({ error: splitCalculationError });
+        }
+
         // Update splits: delete old, insert new
         const { error: deleteSplitsError } = await supabase
             .from('expense_splits')
@@ -800,35 +889,6 @@ app.put('/api/expenses/:expenseId', validateTelegramInitData, async (req: any, r
             .eq('expense_id', expenseId);
 
         if (deleteSplitsError) throw deleteSplitsError;
-
-        const splitsToInsert = [];
-        if (splitWith && Array.isArray(splitWith) && splitWith.length > 0) {
-            const splitAmount = parseFloat(amount) / splitWith.length;
-            for (const memberId of splitWith) {
-                splitsToInsert.push({
-                    expense_id: expenseId,
-                    user_id: memberId,
-                    amount_owed: splitAmount
-                });
-            }
-        } else {
-            // Default evenly across group
-            const { data: groupMembers } = await supabase
-                .from('group_members')
-                .select('user_id')
-                .eq('group_id', targetGroupId);
-
-            if (groupMembers && groupMembers.length > 0) {
-                const splitAmount = parseFloat(amount) / groupMembers.length;
-                for (const member of groupMembers) {
-                    splitsToInsert.push({
-                        expense_id: expenseId,
-                        user_id: member.user_id,
-                        amount_owed: splitAmount
-                    });
-                }
-            }
-        }
 
         if (splitsToInsert.length > 0) {
             const { error: splitsError } = await supabase.from('expense_splits').insert(splitsToInsert);

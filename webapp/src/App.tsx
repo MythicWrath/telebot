@@ -10,6 +10,22 @@ if (WebApp.initData) {
   axios.defaults.headers.common['x-telegram-init-data'] = WebApp.initData;
 }
 
+interface ExpenseSplit {
+  userId: number;
+  amountOwed: number;
+}
+
+interface Expense {
+  id: string;
+  amount: number;
+  currency: string;
+  description: string;
+  paidBy: number;
+  date: string;
+  splitWith: number[];
+  splits?: ExpenseSplit[];
+}
+
 function App() {
   const [activeTab, setActiveTab] = useState<'add' | 'expenses' | 'balances' | 'edit'>('add')
   const [amount, setAmount] = useState('')
@@ -17,6 +33,8 @@ function App() {
   const [description, setDescription] = useState('')
   const [paidBy, setPaidBy] = useState<number | ''>('')
   const [splitWith, setSplitWith] = useState<number[]>([])
+  const [splitType, setSplitType] = useState<'EQUAL' | 'EXACT' | 'PERCENTAGE'>('EQUAL')
+  const [splitValues, setSplitValues] = useState<Record<number, string>>({})
   const [currenciesList, setCurrenciesList] = useState<string[]>(['SGD', 'USD', 'EUR', 'GBP'])
 
   const [isLoading, setIsLoading] = useState(false)
@@ -27,15 +45,6 @@ function App() {
   const [balances, setBalances] = useState<{ id: number, from: string, fromId: number, to: string, toId: number, amount: number, currency: string }[]>([])
   const [isLoadingBalances, setIsLoadingBalances] = useState(false)
 
-  interface Expense {
-    id: string;
-    amount: number;
-    currency: string;
-    description: string;
-    paidBy: number;
-    date: string;
-    splitWith: number[];
-  }
   const [expensesList, setExpensesList] = useState<Expense[]>([])
   const [isLoadingExpenses, setIsLoadingExpenses] = useState(false)
   const [editingExpenseId, setEditingExpenseId] = useState<string | null>(null)
@@ -146,17 +155,123 @@ function App() {
     }
   };
 
-  const handleMainButtonClick = async () => {
-    if (activeTab === 'add') {
-      if (!amount || !description || isLoading || !paidBy || splitWith.length === 0) return;
+  const resetForm = () => {
+    setEditingExpenseId(null);
+    setAmount('');
+    setDescription('');
+    setSplitType('EQUAL');
+    setSplitValues({});
+  };
 
+  // Dynamic split calculations
+  const checkedMembers = members.filter(m => splitWith.includes(m.id));
+  const totalAmountNum = parseFloat(amount) || 0;
+
+  // Exact split calculations
+  const enteredExactSum = checkedMembers.reduce((sum, m) => {
+    const val = parseFloat(splitValues[m.id]);
+    return sum + (!isNaN(val) && val >= 0 ? val : 0);
+  }, 0);
+  const blankExactCount = checkedMembers.filter(
+    m => splitValues[m.id] === undefined || splitValues[m.id].trim() === ''
+  ).length;
+  const remainingExact = Math.max(0, totalAmountNum - enteredExactSum);
+  const placeholderExact =
+    blankExactCount > 0 ? (remainingExact / blankExactCount).toFixed(2) : '0.00';
+
+  // Percentage split calculations
+  const enteredPctSum = checkedMembers.reduce((sum, m) => {
+    const val = parseFloat(splitValues[m.id]);
+    return sum + (!isNaN(val) && val >= 0 ? val : 0);
+  }, 0);
+  const blankPctCount = checkedMembers.filter(
+    m => splitValues[m.id] === undefined || splitValues[m.id].trim() === ''
+  ).length;
+  const remainingPct = Math.max(0, 100 - enteredPctSum);
+  const placeholderPct =
+    blankPctCount > 0 ? (remainingPct / blankPctCount).toFixed(1) : '0';
+
+  // Helper for computing final splits payload
+  const computeFinalSplits = (): { userId: number; amountOwed: number }[] => {
+    if (checkedMembers.length === 0) return [];
+
+    if (splitType === 'EQUAL') {
+      const equalShare = totalAmountNum / checkedMembers.length;
+      return checkedMembers.map(m => ({ userId: m.id, amountOwed: equalShare }));
+    }
+
+    if (splitType === 'EXACT') {
+      return checkedMembers.map(m => {
+        const valStr = splitValues[m.id];
+        if (valStr !== undefined && valStr.trim() !== '' && !isNaN(parseFloat(valStr))) {
+          return { userId: m.id, amountOwed: parseFloat(valStr) };
+        } else {
+          return {
+            userId: m.id,
+            amountOwed: blankExactCount > 0 ? remainingExact / blankExactCount : 0
+          };
+        }
+      });
+    }
+
+    if (splitType === 'PERCENTAGE') {
+      return checkedMembers.map(m => {
+        const valStr = splitValues[m.id];
+        let pct = 0;
+        if (valStr !== undefined && valStr.trim() !== '' && !isNaN(parseFloat(valStr))) {
+          pct = parseFloat(valStr);
+        } else {
+          pct = blankPctCount > 0 ? remainingPct / blankPctCount : 0;
+        }
+        return { userId: m.id, amountOwed: (totalAmountNum * pct) / 100 };
+      });
+    }
+
+    return [];
+  };
+
+  // Form validation function
+  const isFormValid = (): boolean => {
+    if (!amount || isNaN(totalAmountNum) || totalAmountNum <= 0 || !description.trim() || isLoading || !paidBy || splitWith.length === 0) {
+      return false;
+    }
+
+    if (splitType === 'EXACT') {
+      if (enteredExactSum > totalAmountNum + 0.01) return false;
+      if (blankExactCount === 0 && Math.abs(enteredExactSum - totalAmountNum) > 0.01) return false;
+      for (const m of checkedMembers) {
+        const valStr = splitValues[m.id];
+        if (valStr !== undefined && valStr.trim() !== '') {
+          const val = parseFloat(valStr);
+          if (isNaN(val) || val < 0) return false;
+        }
+      }
+    } else if (splitType === 'PERCENTAGE') {
+      if (enteredPctSum > 100.01) return false;
+      if (blankPctCount === 0 && Math.abs(enteredPctSum - 100) > 0.01) return false;
+      for (const m of checkedMembers) {
+        const valStr = splitValues[m.id];
+        if (valStr !== undefined && valStr.trim() !== '') {
+          const val = parseFloat(valStr);
+          if (isNaN(val) || val < 0) return false;
+        }
+      }
+    }
+
+    return true;
+  };
+
+  const handleMainButtonClick = async () => {
+    if (!isFormValid()) return;
+    const finalSplits = computeFinalSplits();
+
+    if (activeTab === 'add') {
       setIsLoading(true);
       if (WebApp.platform !== 'unknown') {
         WebApp.MainButton.showProgress();
       }
 
       try {
-        // Send to our Node.js Backend API
         await axios.post(`${API_BASE_URL}/api/expenses`, {
           initData: WebApp.initData,
           amount: amount,
@@ -164,15 +279,16 @@ function App() {
           description: description,
           groupId: WebApp.initDataUnsafe?.start_param || null,
           paidBy: paidBy,
-          splitWith: splitWith
+          splitWith: splitWith,
+          splits: finalSplits
         });
 
         showAlert(`Successfully added ${currency} ${amount} for ${description}!`);
-        setAmount('');
-        setDescription('');
-      } catch (error) {
+        resetForm();
+      } catch (error: any) {
         console.error("Failed to add expense", error);
-        showAlert('Failed to add expense. Please try again.');
+        const errorDetail = error.response?.data?.error || error.message;
+        showAlert(`Failed to add expense: ${errorDetail}`);
       } finally {
         setIsLoading(false);
         if (WebApp.platform !== 'unknown') {
@@ -181,7 +297,7 @@ function App() {
       }
 
     } else if (activeTab === 'edit') {
-      if (!amount || !description || isLoading || !paidBy || splitWith.length === 0 || !editingExpenseId) return;
+      if (!editingExpenseId) return;
 
       setIsLoading(true);
       if (WebApp.platform !== 'unknown') {
@@ -194,17 +310,17 @@ function App() {
           currency: currency,
           description: description,
           paidBy: paidBy,
-          splitWith: splitWith
+          splitWith: splitWith,
+          splits: finalSplits
         });
 
         showAlert(`Successfully updated expense!`);
-        setAmount('');
-        setDescription('');
-        setEditingExpenseId(null);
+        resetForm();
         setActiveTab('expenses');
-      } catch (error) {
+      } catch (error: any) {
         console.error("Failed to update expense", error);
-        showAlert('Failed to update expense. Please try again.');
+        const errorDetail = error.response?.data?.error || error.message;
+        showAlert(`Failed to update expense: ${errorDetail}`);
       } finally {
         setIsLoading(false);
         if (WebApp.platform !== 'unknown') {
@@ -224,9 +340,7 @@ function App() {
     try {
       await axios.delete(`${API_BASE_URL}/api/expenses/${expenseId}`);
       showAlert(`Successfully deleted expense!`);
-      setAmount('');
-      setDescription('');
-      setEditingExpenseId(null);
+      resetForm();
       setActiveTab('expenses');
     } catch (error) {
       console.error("Failed to delete expense", error);
@@ -242,30 +356,23 @@ function App() {
     return () => {
       WebApp.MainButton.offClick(handleMainButtonClick);
     };
-  }, [activeTab, amount, currency, description, paidBy, splitWith, isLoading, editingExpenseId]);
+  }, [activeTab, amount, currency, description, paidBy, splitWith, splitType, splitValues, isLoading, editingExpenseId]);
 
   useEffect(() => {
-    if (activeTab === 'add') {
-      if (amount && description && paidBy && splitWith.length > 0) {
-        WebApp.MainButton.setText('Split Expense');
-        WebApp.MainButton.show();
-      } else {
-        WebApp.MainButton.hide();
-      }
-    } else if (activeTab === 'edit') {
-      if (amount && description && paidBy && splitWith.length > 0) {
-        WebApp.MainButton.setText('Save Changes');
+    if (activeTab === 'add' || activeTab === 'edit') {
+      if (isFormValid()) {
+        WebApp.MainButton.setText(activeTab === 'add' ? 'Split Expense' : 'Save Changes');
         WebApp.MainButton.show();
       } else {
         WebApp.MainButton.hide();
       }
     } else if (activeTab === 'balances') {
       WebApp.MainButton.setText('Settle Selected Debt');
-      WebApp.MainButton.show(); // Always show to demo action
+      WebApp.MainButton.show();
     } else {
       WebApp.MainButton.hide();
     }
-  }, [activeTab, amount, description, paidBy, splitWith]);
+  }, [activeTab, amount, description, paidBy, splitWith, splitType, splitValues]);
 
   const currentUserId = WebApp.initDataUnsafe?.user?.id;
   let totalIOwe = 0;
@@ -301,7 +408,7 @@ function App() {
       {/* Tabs */}
       <div className="flex bg-[var(--tg-theme-secondary-bg-color,#f4f4f5)] p-1 rounded-xl">
         <button
-          onClick={() => { setActiveTab('add'); setEditingExpenseId(null); setAmount(''); setDescription(''); }}
+          onClick={() => { setActiveTab('add'); resetForm(); }}
           className={`flex-1 py-2 text-sm font-medium rounded-lg transition-colors ${
             activeTab === 'add'
               ? 'bg-[var(--tg-theme-bg-color,#ffffff)] text-[var(--tg-theme-text-color,#000000)] shadow-sm'
@@ -311,7 +418,7 @@ function App() {
           Add Expense
         </button>
         <button
-          onClick={() => { setActiveTab('expenses'); setEditingExpenseId(null); setAmount(''); setDescription(''); }}
+          onClick={() => { setActiveTab('expenses'); resetForm(); }}
           className={`flex-1 py-2 text-sm font-medium rounded-lg transition-colors ${
             activeTab === 'expenses'
               ? 'bg-[var(--tg-theme-bg-color,#ffffff)] text-[var(--tg-theme-text-color,#000000)] shadow-sm'
@@ -321,7 +428,7 @@ function App() {
           Expenses
         </button>
         <button
-          onClick={() => { setActiveTab('balances'); setEditingExpenseId(null); setAmount(''); setDescription(''); }}
+          onClick={() => { setActiveTab('balances'); resetForm(); }}
           className={`flex-1 py-2 text-sm font-medium rounded-lg transition-colors ${
             activeTab === 'balances'
               ? 'bg-[var(--tg-theme-bg-color,#ffffff)] text-[var(--tg-theme-text-color,#000000)] shadow-sm'
@@ -338,7 +445,7 @@ function App() {
           {activeTab === 'edit' && (
             <div className="flex items-center justify-between mb-2 border-b border-gray-200 dark:border-white/10 pb-2">
               <button 
-                onClick={() => { setActiveTab('expenses'); setEditingExpenseId(null); setAmount(''); setDescription(''); }} 
+                onClick={() => { setActiveTab('expenses'); resetForm(); }} 
                 className="text-sm font-medium text-blue-500 flex items-center gap-1 bg-transparent border-none cursor-pointer"
               >
                 ← Back
@@ -399,29 +506,131 @@ function App() {
             )}
           </div>
 
+          {/* Split Type Selector */}
           <div>
-            <label className="block text-sm font-medium mb-1 opacity-80">Split With</label>
+            <label className="block text-sm font-medium mb-1 opacity-80">Split Type</label>
+            <div className="flex bg-white dark:bg-black/20 p-1 rounded-lg">
+              <button
+                type="button"
+                onClick={() => setSplitType('EQUAL')}
+                className={`flex-1 py-2 text-xs font-semibold rounded-md transition-colors border-none cursor-pointer ${
+                  splitType === 'EQUAL'
+                    ? 'bg-blue-500 text-white shadow-sm'
+                    : 'bg-transparent text-[var(--tg-theme-text-color,#000000)] opacity-70'
+                }`}
+              >
+                Equal (=)
+              </button>
+              <button
+                type="button"
+                onClick={() => setSplitType('EXACT')}
+                className={`flex-1 py-2 text-xs font-semibold rounded-md transition-colors border-none cursor-pointer ${
+                  splitType === 'EXACT'
+                    ? 'bg-blue-500 text-white shadow-sm'
+                    : 'bg-transparent text-[var(--tg-theme-text-color,#000000)] opacity-70'
+                }`}
+              >
+                Exact ({currency})
+              </button>
+              <button
+                type="button"
+                onClick={() => setSplitType('PERCENTAGE')}
+                className={`flex-1 py-2 text-xs font-semibold rounded-md transition-colors border-none cursor-pointer ${
+                  splitType === 'PERCENTAGE'
+                    ? 'bg-blue-500 text-white shadow-sm'
+                    : 'bg-transparent text-[var(--tg-theme-text-color,#000000)] opacity-70'
+                }`}
+              >
+                Percentage (%)
+              </button>
+            </div>
+            {splitType !== 'EQUAL' && (
+              <p className="text-xs opacity-60 mt-1 italic">
+                Leave fields blank to split the remaining amount equally.
+              </p>
+            )}
+          </div>
+
+          {/* Members Split With List */}
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-sm font-medium opacity-80">Split With</label>
+              {splitType === 'EXACT' && totalAmountNum > 0 && (
+                <span className={`text-xs font-medium ${enteredExactSum > totalAmountNum + 0.01 ? 'text-red-500' : 'opacity-70'}`}>
+                  {enteredExactSum > totalAmountNum + 0.01
+                    ? `Over allocated: ${currency} ${enteredExactSum.toFixed(2)} / ${totalAmountNum.toFixed(2)}`
+                    : `Remaining: ${currency} ${remainingExact.toFixed(2)}`}
+                </span>
+              )}
+              {splitType === 'PERCENTAGE' && (
+                <span className={`text-xs font-medium ${enteredPctSum > 100.01 ? 'text-red-500' : 'opacity-70'}`}>
+                  {enteredPctSum > 100.01
+                    ? `Over 100%: ${enteredPctSum.toFixed(1)}%`
+                    : `Remaining: ${remainingPct.toFixed(1)}%`}
+                </span>
+              )}
+            </div>
+
             {isLoadingMembers ? (
               <div className="opacity-60 py-2">Loading members...</div>
             ) : (
               <div className="flex flex-col gap-2">
-                {members.map(m => (
-                  <label key={m.id} className="flex items-center gap-3 bg-white dark:bg-black/10 p-3 rounded-lg cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={splitWith.includes(m.id)}
-                      onChange={(e) => {
-                        if (e.target.checked) {
-                          setSplitWith([...splitWith, m.id]);
-                        } else {
-                          setSplitWith(splitWith.filter(id => id !== m.id));
-                        }
-                      }}
-                      className="w-5 h-5 rounded border-gray-300 text-blue-600 focus:ring-blue-500 bg-gray-100"
-                    />
-                    <span className="font-medium">{m.name}</span>
-                  </label>
-                ))}
+                {members.map(m => {
+                  const isChecked = splitWith.includes(m.id);
+                  return (
+                    <div key={m.id} className="flex items-center justify-between bg-white dark:bg-black/10 p-3 rounded-lg gap-2">
+                      <label className="flex items-center gap-3 cursor-pointer flex-1 min-w-0">
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSplitWith([...splitWith, m.id]);
+                            } else {
+                              setSplitWith(splitWith.filter(id => id !== m.id));
+                              const newVals = { ...splitValues };
+                              delete newVals[m.id];
+                              setSplitValues(newVals);
+                            }
+                          }}
+                          className="w-5 h-5 rounded border-gray-300 text-blue-600 focus:ring-blue-500 bg-gray-100"
+                        />
+                        <span className="font-medium truncate text-sm">{m.name}</span>
+                      </label>
+
+                      {isChecked && splitType === 'EXACT' && (
+                        <div className="flex items-center gap-1 w-32 shrink-0">
+                          <span className="text-xs opacity-60 font-semibold">{currency}</span>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            value={splitValues[m.id] ?? ''}
+                            onChange={(e) => setSplitValues({ ...splitValues, [m.id]: e.target.value })}
+                            placeholder={placeholderExact}
+                            className="w-full px-2 py-1.5 rounded border border-gray-200 dark:border-white/10 bg-transparent text-right text-sm font-medium focus:outline-none focus:ring-1 focus:ring-blue-500"
+                          />
+                        </div>
+                      )}
+
+                      {isChecked && splitType === 'PERCENTAGE' && (
+                        <div className="flex items-center gap-1 w-28 shrink-0">
+                          <input
+                            type="number"
+                            step="0.1"
+                            min="0"
+                            max="100"
+                            value={splitValues[m.id] ?? ''}
+                            onChange={(e) => setSplitValues({ ...splitValues, [m.id]: e.target.value })}
+                            placeholder={`${placeholderPct}%`}
+                            className="w-full px-2 py-1.5 rounded border border-gray-200 dark:border-white/10 bg-transparent text-right text-sm font-medium focus:outline-none focus:ring-1 focus:ring-blue-500"
+                          />
+                          <span className="text-xs opacity-60 font-semibold">%</span>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -470,6 +679,27 @@ function App() {
                   setDescription(exp.description);
                   setPaidBy(exp.paidBy);
                   setSplitWith(exp.splitWith);
+
+                  if (exp.splits && exp.splits.length > 0) {
+                    const amounts = exp.splits.map(s => s.amountOwed);
+                    const maxAmount = Math.max(...amounts);
+                    const minAmount = Math.min(...amounts);
+                    if (maxAmount - minAmount <= 0.02) {
+                      setSplitType('EQUAL');
+                      setSplitValues({});
+                    } else {
+                      setSplitType('EXACT');
+                      const valMap: Record<number, string> = {};
+                      exp.splits.forEach(s => {
+                        valMap[s.userId] = s.amountOwed.toString();
+                      });
+                      setSplitValues(valMap);
+                    }
+                  } else {
+                    setSplitType('EQUAL');
+                    setSplitValues({});
+                  }
+
                   setActiveTab('edit');
                 }}
                 className="flex items-center justify-between bg-[var(--tg-theme-secondary-bg-color,#f4f4f5)] p-4 rounded-xl cursor-pointer hover:opacity-90 active:scale-[0.99] transition-all"
@@ -544,7 +774,8 @@ function App() {
       {WebApp.platform === 'unknown' && (
         <button
           onClick={handleMainButtonClick}
-          className={`w-full py-3 rounded-xl font-bold text-white mb-2 transition-opacity border-none cursor-pointer ${(activeTab === 'add' || activeTab === 'edit') && (!amount || !description || isLoading || !paidBy || splitWith.length === 0)
+          disabled={!isFormValid() && (activeTab === 'add' || activeTab === 'edit')}
+          className={`w-full py-3 rounded-xl font-bold text-white mb-2 transition-opacity border-none cursor-pointer ${(activeTab === 'add' || activeTab === 'edit') && !isFormValid()
             ? 'bg-blue-300 cursor-not-allowed'
             : 'bg-blue-500 hover:bg-blue-600'
             }`}
