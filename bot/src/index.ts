@@ -17,6 +17,9 @@ if (!botToken) {
 }
 
 const bot = new Telegraf(botToken);
+bot.catch((err: any, ctx) => {
+    console.error(`Telegraf error for update ${ctx?.update?.update_id}:`, err);
+});
 const app = express();
 
 app.use(cors());
@@ -1157,9 +1160,21 @@ app.get('/api/groups/:groupId/balances', validateTelegramInitData, requireGroupA
     }
 });
 
+// Webhook health check endpoint
+app.get('/api/webhook', (req, res) => {
+    res.status(200).send('Telebot webhook endpoint is active.');
+});
+
 // Webhook endpoint — Telegram POSTs updates here in production
-app.post('/api/webhook', (req, res) => {
-    bot.handleUpdate(req.body, res);
+app.post('/api/webhook', async (req, res) => {
+    try {
+        await bot.handleUpdate(req.body, res);
+    } catch (err) {
+        console.error('Error processing Telegram webhook update:', err);
+        if (!res.headersSent) {
+            res.status(500).send('Internal Server Error');
+        }
+    }
 });
 
 // Enable graceful stop
