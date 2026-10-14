@@ -11,6 +11,9 @@
     "dev:bot": "npm run dev --workspace=bot",
     "dev:webapp": "npm run dev --workspace=webapp",
     "build:bot": "npm run build --workspace=bot",
-    "build:webapp": "npm run build --workspace=webapp"
+    "build:webapp": "npm run build --workspace=webapp",
+    "webhook:info": "tsx bot/src/manageWebhook.ts info",
+    "webhook:set": "tsx bot/src/manageWebhook.ts set",
+    "webhook:delete": "tsx bot/src/manageWebhook.ts delete"
   }
 }

@@ -18,6 +18,7 @@
   - [x] Push to GitHub and deploy on Vercel (set env vars: `TELEGRAM_BOT_TOKEN`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `NODE_ENV=production`)
   - [x] Register the webhook URL with Telegram (`setWebhook` API call)
 - [ ] Implement update and delete expenses API/logic
+  - [ ] Send Telegram group notification message when an expense is updated or deleted
 
 ## Mini App (Frontend)
 - [x] Bootstrap React + Vite App
@@ -27,6 +28,7 @@
 - [x] Build UI: Group Balances View (Who owes whom)
 - [x] Deploy Mini App to Vercel
 - [ ] Build UI: Update and delete expenses
+- [ ] Build UI: Personal Expense Dashboard (Overview of all joined groups and net balances owed/owing)
 
 ## Core Logic & Polish
 - [x] Implement Debt Simplification Algorithm
@@ -39,11 +41,16 @@
 - [x] Backend: Extract accurate User ID and Group ID off the validated `initData` payload instead of mocked IDs.
 - [x] Backend: Set up robust error handling for missing group access.
 
-## Future Features
+## Future Features & Monetization
 - [ ] Smart currency defaulting (Guess currency based on user timezone/location).
 - [x] Unequal splitting of expenses (e.g., exact amounts or percentages).
 - [ ] Group settings page: Build a tab for the group creator to set permissions (e.g., restrict editing/deleting expenses to just the creator vs anyone).
 - [ ] Code Refactoring: Separate business logic from platform-dependent code (e.g., Supabase) to enable easy platform switching in the future.
+- [ ] Personal Expense Dashboard: Backend support & user-level balance aggregation across groups.
+- [ ] Subscription & Pass System:
+  - [ ] Database schema & API logic for weekly/yearly subscriptions and pay-as-you-need passes (e.g., $2/person weekly pass).
+  - [ ] Integration of quick payment settlement links (Google Pay, WeChat Pay).
+  - [ ] Feature gating & monetization options (Free tier ads vs Premium tier ad-free, auto-currency conversion gating).
 
 ## User Feedback & UI Improvements
 - [x] UI: Fix active tab color contrast in navbar (currently black text on dark grey is low visibility for color vision deficiency).

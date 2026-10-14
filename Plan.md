@@ -27,3 +27,5 @@ I want to make a Telegram bot/miniapp that can split money between users. The bo
 - Smart defaulting of currency: Best guess of the currency of an expense based on the user's local timezone/location (e.g., retrieving from Telegram WebApp initData or navigator API).
 - Settings page/tab: Allow the group creator to configure settings (e.g., restricting who can edit/delete expenses to anyone vs. just the creator).
 - Refactoring of backend to separate business logic from platform-dependent code (e.g., Supabase) to enable easy platform switching in the future.
+- Editing of currently made expenses in a group. A notification message should be sent to the group when this is done.
+- A personal dashboard for expenses, maybe we can start with a simple list of groups and the total money that they owe or are owed in each expense group that they belong to? 

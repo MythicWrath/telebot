@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import WebApp from '@twa-dev/sdk'
 import axios from 'axios'
+import { guessUserCurrency } from './utils/currencyUtils'
 import './index.css'
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:3000';
@@ -29,7 +30,7 @@ interface Expense {
 function App() {
   const [activeTab, setActiveTab] = useState<'add' | 'expenses' | 'balances' | 'edit'>('add')
   const [amount, setAmount] = useState('')
-  const [currency, setCurrency] = useState('USD')
+  const [currency, setCurrency] = useState(() => guessUserCurrency(WebApp.initDataUnsafe?.user?.language_code))
   const [description, setDescription] = useState('')
   const [paidBy, setPaidBy] = useState<number | ''>('')
   const [splitWith, setSplitWith] = useState<number[]>([])
@@ -89,7 +90,16 @@ function App() {
       try {
         const response = await axios.get(`${API_BASE_URL}/api/currencies`);
         if (response.data && response.data.currencies) {
-          setCurrenciesList(response.data.currencies);
+          const fetched: string[] = response.data.currencies;
+          setCurrenciesList(fetched);
+          // Validate that the guessed currency is actually supported.
+          // If not, fall back to SGD (our base currency) or USD.
+          setCurrency(prev => {
+            if (fetched.includes(prev)) return prev;
+            if (fetched.includes('SGD')) return 'SGD';
+            if (fetched.includes('USD')) return 'USD';
+            return fetched[0] ?? prev;
+          });
         }
       } catch (e) {
         console.error("Failed to fetch currencies", e);
