@@ -27,6 +27,30 @@ app.use(express.json());
 
 const isDev = process.env.NODE_ENV !== 'production';
 
+// --- Quick-Add Expense Conversation State ---
+// Keyed by "chatId_userId" to track per-user, per-group pending states.
+// Discriminated union so each step only carries the fields it needs.
+type PendingExpense =
+    | { step: 'awaiting_description'; amount: number; currency: string }  // /split 300 → need name
+    | { step: 'awaiting_amount';      description: string };               // /split Dinner → need amount
+const pendingExpenses = new Map<string, PendingExpense>();
+
+// Helper: Get the most recently used currency for a group, fallback to SGD
+async function getGroupDefaultCurrency(groupId: number): Promise<string> {
+    try {
+        const { data } = await supabase
+            .from('expenses')
+            .select('currency')
+            .eq('group_id', groupId)
+            .order('date', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+        return data?.currency || 'SGD';
+    } catch {
+        return 'SGD';
+    }
+}
+
 // --- Telegram InitData Validation & Extraction ---
 interface TelegramUser {
     id: number;
@@ -276,19 +300,74 @@ bot.action(/^tutorial:(.+)$/, async (ctx) => {
 });
 
 
-// User command: /split - Get the link to open the Mini App in this group
+// User command: /split [amount] [currency] - Quick-add an expense, or open the Mini App
+// Examples:
+//   /split          → opens Mini App
+//   /split 300      → starts quick-add flow using the group's last-used currency
+//   /split $300     → same ($ sign is stripped)
+//   /split 300 USD  → starts quick-add flow with USD
 bot.command('split', async (ctx) => {
     const chat = ctx.chat;
     if (!chat || (chat.type !== 'group' && chat.type !== 'supergroup')) {
         return ctx.reply('This command can only be used in a group chat.');
     }
+
+    // Parse arguments from the command text
+    const args = ctx.message.text.split(/\s+/).slice(1);
+
+    if (args.length > 0) {
+        // Reconstruct the full argument (handles names with spaces: /split Grab Food)
+        const fullArg = args.join(' ');
+
+        // Strip common currency symbols and commas to test if it's a number: $300 → 300, 1,500 → 1500
+        const rawAmount = args[0].replace(/[$€£¥,]/g, '');
+        const amount = parseFloat(rawAmount);
+
+        if (!isNaN(amount) && amount > 0) {
+            // --- Number first: /split 300 [USD] ---
+            // Determine currency: explicit arg (e.g. /split 300 USD) or group default
+            let currency: string;
+            if (args[1] && isNaN(parseFloat(args[1]))) {
+                // Second arg looks like a currency code, not another number
+                currency = args[1].toUpperCase();
+            } else {
+                currency = await getGroupDefaultCurrency(chat.id);
+            }
+
+            // Store the pending state and prompt for a description
+            const key = `${chat.id}_${ctx.from!.id}`;
+            pendingExpenses.set(key, { amount, currency, step: 'awaiting_description' });
+
+            return ctx.reply(
+                `💸 *${currency} ${amount.toFixed(2)}* — what’s this expense called?\n\n` +
+                `_Reply with the name (e.g. "Dinner", "Grab") and I’ll add it instantly!_\n` +
+                `Type /cancel to abort.`,
+                { parse_mode: 'Markdown' }
+            );
+        } else {
+            // --- Name first: /split Dinner (or /split Grab Food) ---
+            const description = fullArg.trim();
+            const key = `${chat.id}_${ctx.from!.id}`;
+            pendingExpenses.set(key, { description, step: 'awaiting_amount' });
+
+            return ctx.reply(
+                `📝 *"${description}"* — how much was it?\n\n` +
+                `_Reply with the amount (e.g. \`300\` or \`$150.50\` or \`200 USD\`)._\n` +
+                `Type /cancel to abort.`,
+                { parse_mode: 'Markdown' }
+            );
+        }
+    }
+
+    // No arguments — show the Mini App link as usual
     const botUsername = ctx.botInfo.username;
     // Note: 'app' is the default short name placeholder. Change this link if your short name is different.
     const link = `https://t.me/${botUsername}/app?startapp=${chat.id}`;
-    
+
     ctx.reply(
         `💵 *Tele Split Money*\n\n` +
         `Ready to split expenses in this group chat? Click the button below to open the Mini App!\n\n` +
+        `💡 _Tip: Use \`/split <amount>\` to instantly add an expense without opening the app._\n` +
         `💡 _If group members are missing from the app, use /sync to register everyone._`,
         {
             parse_mode: 'Markdown',
@@ -529,8 +608,20 @@ bot.command('addmember', requireGroupAdmin, async (ctx) => {
     }
 });
 
+// /cancel command — clears any pending quick-add expense state for the user
+bot.command('cancel', async (ctx) => {
+    const chat = ctx.chat;
+    const user = ctx.from;
+    if (!chat || !user) return;
+    const key = `${chat.id}_${user.id}`;
+    if (pendingExpenses.has(key)) {
+        pendingExpenses.delete(key);
+        ctx.reply('❌ Quick-add cancelled.');
+    }
+});
+
 // Middleware for tracking groups — registers any user who sends a message,
-// and also registers the original sender if a message is forwarded into the group.
+// intercepts pending quick-add expense descriptions, and registers forwarded senders.
 bot.on('message', async (ctx, next) => {
     const chat = ctx.chat;
     const user = ctx.from;
@@ -545,6 +636,137 @@ bot.on('message', async (ctx, next) => {
         // Register the sender
         if (user) {
             await registerGroupMember(user.id, user.first_name, user.username, user.language_code, chat.id);
+        }
+
+        // --- Quick-add: intercept pending expense replies ---
+        if (user && msg.text && !msg.text.startsWith('/')) {
+            const key = `${chat.id}_${user.id}`;
+            const pending = pendingExpenses.get(key);
+
+            if (pending?.step === 'awaiting_description') {
+                // We have the amount; user is supplying the name
+                pendingExpenses.delete(key);
+                const description = msg.text.trim();
+
+                try {
+                    const { data: members } = await supabase
+                        .from('group_members')
+                        .select('user_id')
+                        .eq('group_id', chat.id);
+
+                    if (!members || members.length === 0) {
+                        await ctx.reply('❌ Could not find group members. Please run /sync first.');
+                        return next();
+                    }
+
+                    const { data: expense, error: expenseError } = await supabase
+                        .from('expenses')
+                        .insert({
+                            group_id: chat.id,
+                            paid_by: user.id,
+                            amount: pending.amount,
+                            currency: pending.currency,
+                            description
+                        })
+                        .select()
+                        .single();
+
+                    if (expenseError || !expense) throw expenseError || new Error('Failed to create expense');
+
+                    const { splitsToInsert } = computeExpenseSplits(
+                        expense.id, pending.amount, user.id, undefined, undefined, members
+                    );
+                    if (splitsToInsert.length > 0) await supabase.from('expense_splits').insert(splitsToInsert);
+
+                    const perPersonAmount = (pending.amount / members.length).toFixed(2);
+                    const memberCount = members.length;
+
+                    await ctx.reply(
+                        `✅ *Expense Added!*\n\n` +
+                        `📝 *${description}*\n` +
+                        `💰 ${pending.currency} ${pending.amount.toFixed(2)} paid by ${user.first_name}\n` +
+                        `👥 Split equally among ${memberCount} member${memberCount !== 1 ? 's' : ''} — *${pending.currency} ${perPersonAmount}* each`,
+                        { parse_mode: 'Markdown' }
+                    );
+                    return next();
+                } catch (e: any) {
+                    console.error('Quick-add expense failed:', e);
+                    await ctx.reply(`❌ Failed to add expense: ${e.message}`);
+                    return next();
+                }
+
+            } else if (pending?.step === 'awaiting_amount') {
+                // We have the name; user is supplying the amount (and optional currency)
+                const parts = msg.text.trim().split(/\s+/);
+                // Strip $, €, £, ¥ and commas so "$300" or "1,500" parse correctly
+                const rawAmount = parts[0].replace(/[$€£¥,]/g, '');
+                const amount = parseFloat(rawAmount);
+
+                if (isNaN(amount) || amount <= 0) {
+                    return ctx.reply(
+                        `❌ That doesn’t look like a valid amount. Try something like \`300\`, \`$150.50\`, or \`200 USD\`.`,
+                        { parse_mode: 'Markdown' }
+                    );
+                    // Leave the pending state intact so they can try again
+                }
+
+                // Optional currency as second word; otherwise use group default
+                let currency: string;
+                if (parts[1] && isNaN(parseFloat(parts[1]))) {
+                    currency = parts[1].toUpperCase();
+                } else {
+                    currency = await getGroupDefaultCurrency(chat.id);
+                }
+
+                pendingExpenses.delete(key);
+
+                try {
+                    const { data: members } = await supabase
+                        .from('group_members')
+                        .select('user_id')
+                        .eq('group_id', chat.id);
+
+                    if (!members || members.length === 0) {
+                        await ctx.reply('❌ Could not find group members. Please run /sync first.');
+                        return next();
+                    }
+
+                    const { data: expense, error: expenseError } = await supabase
+                        .from('expenses')
+                        .insert({
+                            group_id: chat.id,
+                            paid_by: user.id,
+                            amount,
+                            currency,
+                            description: pending.description
+                        })
+                        .select()
+                        .single();
+
+                    if (expenseError || !expense) throw expenseError || new Error('Failed to create expense');
+
+                    const { splitsToInsert } = computeExpenseSplits(
+                        expense.id, amount, user.id, undefined, undefined, members
+                    );
+                    if (splitsToInsert.length > 0) await supabase.from('expense_splits').insert(splitsToInsert);
+
+                    const perPersonAmount = (amount / members.length).toFixed(2);
+                    const memberCount = members.length;
+
+                    await ctx.reply(
+                        `✅ *Expense Added!*\n\n` +
+                        `📝 *${pending.description}*\n` +
+                        `💰 ${currency} ${amount.toFixed(2)} paid by ${user.first_name}\n` +
+                        `👥 Split equally among ${memberCount} member${memberCount !== 1 ? 's' : ''} — *${currency} ${perPersonAmount}* each`,
+                        { parse_mode: 'Markdown' }
+                    );
+                    return next();
+                } catch (e: any) {
+                    console.error('Quick-add expense (name-first) failed:', e);
+                    await ctx.reply(`❌ Failed to add expense: ${e.message}`);
+                    return next();
+                }
+            }
         }
 
         // If this is a forwarded message and the original sender's identity is visible,

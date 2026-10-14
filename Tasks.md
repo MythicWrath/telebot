@@ -42,7 +42,7 @@
 - [x] Backend: Set up robust error handling for missing group access.
 
 ## Future Features & Monetization
-- [ ] Smart currency defaulting (Guess currency based on user timezone/location).
+- [x] Smart currency defaulting (Guess currency based on user timezone/location).
 - [x] Unequal splitting of expenses (e.g., exact amounts or percentages).
 - [ ] Group settings page: Build a tab for the group creator to set permissions (e.g., restrict editing/deleting expenses to just the creator vs anyone).
 - [ ] Code Refactoring: Separate business logic from platform-dependent code (e.g., Supabase) to enable easy platform switching in the future.
