@@ -55,3 +55,4 @@
 ## User Feedback & UI Improvements
 - [x] UI: Fix active tab color contrast in navbar (currently black text on dark grey is low visibility for color vision deficiency).
 - [x] Features: Expand the frontend currency dropdown to support more currencies (the backend `currencies.ts` already fetches rates for over 100 currencies from open.er-api.com).
+- [x] UI: Temporarily pin SGD and NTD to the top of the currency selection dropdown.

@@ -27,6 +27,16 @@ interface Expense {
   splits?: ExpenseSplit[];
 }
 
+// Priority currencies temporarily pinned to the top of the dropdown
+const PRIORITY_CURRENCIES = ['SGD', 'NTD'];
+
+function organizeCurrencies(currencies: string[]): string[] {
+  const combined = Array.from(new Set([...PRIORITY_CURRENCIES, ...currencies]));
+  const top = PRIORITY_CURRENCIES.filter(c => combined.includes(c));
+  const remaining = combined.filter(c => !PRIORITY_CURRENCIES.includes(c)).sort();
+  return [...top, ...remaining];
+}
+
 function App() {
   const [activeTab, setActiveTab] = useState<'add' | 'expenses' | 'balances' | 'edit'>('add')
   const [amount, setAmount] = useState('')
@@ -36,7 +46,9 @@ function App() {
   const [splitWith, setSplitWith] = useState<number[]>([])
   const [splitType, setSplitType] = useState<'EQUAL' | 'EXACT' | 'PERCENTAGE'>('EQUAL')
   const [splitValues, setSplitValues] = useState<Record<number, string>>({})
-  const [currenciesList, setCurrenciesList] = useState<string[]>(['SGD', 'USD', 'EUR', 'GBP'])
+  const [currenciesList, setCurrenciesList] = useState<string[]>(() =>
+    organizeCurrencies(['SGD', 'NTD', 'USD', 'EUR', 'GBP'])
+  )
 
   const [isLoading, setIsLoading] = useState(false)
 
@@ -91,14 +103,15 @@ function App() {
         const response = await axios.get(`${API_BASE_URL}/api/currencies`);
         if (response.data && response.data.currencies) {
           const fetched: string[] = response.data.currencies;
-          setCurrenciesList(fetched);
+          const organized = organizeCurrencies(fetched);
+          setCurrenciesList(organized);
           // Validate that the guessed currency is actually supported.
           // If not, fall back to SGD (our base currency) or USD.
           setCurrency(prev => {
-            if (fetched.includes(prev)) return prev;
-            if (fetched.includes('SGD')) return 'SGD';
-            if (fetched.includes('USD')) return 'USD';
-            return fetched[0] ?? prev;
+            if (organized.includes(prev)) return prev;
+            if (organized.includes('SGD')) return 'SGD';
+            if (organized.includes('USD')) return 'USD';
+            return organized[0] ?? prev;
           });
         }
       } catch (e) {
@@ -419,31 +432,28 @@ function App() {
       <div className="flex bg-[var(--tg-theme-secondary-bg-color,#f4f4f5)] p-1 rounded-xl">
         <button
           onClick={() => { setActiveTab('add'); resetForm(); }}
-          className={`flex-1 py-2 text-sm font-medium rounded-lg transition-colors ${
-            activeTab === 'add'
-              ? 'bg-[var(--tg-theme-bg-color,#ffffff)] text-[var(--tg-theme-text-color,#000000)] shadow-sm'
-              : 'text-[var(--tg-theme-text-color,#000000)] opacity-60'
-          }`}
+          className={`flex-1 py-2 text-sm font-medium rounded-lg transition-colors ${activeTab === 'add'
+            ? 'bg-[var(--tg-theme-bg-color,#ffffff)] text-[var(--tg-theme-text-color,#000000)] shadow-sm'
+            : 'text-[var(--tg-theme-text-color,#000000)] opacity-60'
+            }`}
         >
           Add Expense
         </button>
         <button
           onClick={() => { setActiveTab('expenses'); resetForm(); }}
-          className={`flex-1 py-2 text-sm font-medium rounded-lg transition-colors ${
-            activeTab === 'expenses'
-              ? 'bg-[var(--tg-theme-bg-color,#ffffff)] text-[var(--tg-theme-text-color,#000000)] shadow-sm'
-              : 'text-[var(--tg-theme-text-color,#000000)] opacity-60'
-          }`}
+          className={`flex-1 py-2 text-sm font-medium rounded-lg transition-colors ${activeTab === 'expenses'
+            ? 'bg-[var(--tg-theme-bg-color,#ffffff)] text-[var(--tg-theme-text-color,#000000)] shadow-sm'
+            : 'text-[var(--tg-theme-text-color,#000000)] opacity-60'
+            }`}
         >
           Expenses
         </button>
         <button
           onClick={() => { setActiveTab('balances'); resetForm(); }}
-          className={`flex-1 py-2 text-sm font-medium rounded-lg transition-colors ${
-            activeTab === 'balances'
-              ? 'bg-[var(--tg-theme-bg-color,#ffffff)] text-[var(--tg-theme-text-color,#000000)] shadow-sm'
-              : 'text-[var(--tg-theme-text-color,#000000)] opacity-60'
-          }`}
+          className={`flex-1 py-2 text-sm font-medium rounded-lg transition-colors ${activeTab === 'balances'
+            ? 'bg-[var(--tg-theme-bg-color,#ffffff)] text-[var(--tg-theme-text-color,#000000)] shadow-sm'
+            : 'text-[var(--tg-theme-text-color,#000000)] opacity-60'
+            }`}
         >
           Balances
         </button>
@@ -454,8 +464,8 @@ function App() {
         <div className="flex flex-col gap-4 bg-[var(--tg-theme-secondary-bg-color,#f4f4f5)] p-4 rounded-xl">
           {activeTab === 'edit' && (
             <div className="flex items-center justify-between mb-2 border-b border-gray-200 dark:border-white/10 pb-2">
-              <button 
-                onClick={() => { setActiveTab('expenses'); resetForm(); }} 
+              <button
+                onClick={() => { setActiveTab('expenses'); resetForm(); }}
                 className="text-sm font-medium text-blue-500 flex items-center gap-1 bg-transparent border-none cursor-pointer"
               >
                 ← Back
@@ -523,33 +533,30 @@ function App() {
               <button
                 type="button"
                 onClick={() => setSplitType('EQUAL')}
-                className={`flex-1 py-2 text-xs font-semibold rounded-md transition-colors border-none cursor-pointer ${
-                  splitType === 'EQUAL'
-                    ? 'bg-blue-500 text-white shadow-sm'
-                    : 'bg-transparent text-[var(--tg-theme-text-color,#000000)] opacity-70'
-                }`}
+                className={`flex-1 py-2 text-xs font-semibold rounded-md transition-colors border-none cursor-pointer ${splitType === 'EQUAL'
+                  ? 'bg-blue-500 text-white shadow-sm'
+                  : 'bg-transparent text-[var(--tg-theme-text-color,#000000)] opacity-70'
+                  }`}
               >
                 Equal (=)
               </button>
               <button
                 type="button"
                 onClick={() => setSplitType('EXACT')}
-                className={`flex-1 py-2 text-xs font-semibold rounded-md transition-colors border-none cursor-pointer ${
-                  splitType === 'EXACT'
-                    ? 'bg-blue-500 text-white shadow-sm'
-                    : 'bg-transparent text-[var(--tg-theme-text-color,#000000)] opacity-70'
-                }`}
+                className={`flex-1 py-2 text-xs font-semibold rounded-md transition-colors border-none cursor-pointer ${splitType === 'EXACT'
+                  ? 'bg-blue-500 text-white shadow-sm'
+                  : 'bg-transparent text-[var(--tg-theme-text-color,#000000)] opacity-70'
+                  }`}
               >
                 Exact ({currency})
               </button>
               <button
                 type="button"
                 onClick={() => setSplitType('PERCENTAGE')}
-                className={`flex-1 py-2 text-xs font-semibold rounded-md transition-colors border-none cursor-pointer ${
-                  splitType === 'PERCENTAGE'
-                    ? 'bg-blue-500 text-white shadow-sm'
-                    : 'bg-transparent text-[var(--tg-theme-text-color,#000000)] opacity-70'
-                }`}
+                className={`flex-1 py-2 text-xs font-semibold rounded-md transition-colors border-none cursor-pointer ${splitType === 'PERCENTAGE'
+                  ? 'bg-blue-500 text-white shadow-sm'
+                  : 'bg-transparent text-[var(--tg-theme-text-color,#000000)] opacity-70'
+                  }`}
               >
                 Percentage (%)
               </button>
@@ -680,8 +687,8 @@ function App() {
             });
 
             return (
-              <div 
-                key={exp.id} 
+              <div
+                key={exp.id}
                 onClick={() => {
                   setEditingExpenseId(exp.id);
                   setAmount(exp.amount.toString());

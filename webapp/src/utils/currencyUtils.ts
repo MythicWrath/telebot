@@ -15,7 +15,7 @@ const TIMEZONE_TO_CURRENCY: Record<string, string> = {
   'Asia/Urumqi': 'CNY',
   'Asia/Hong_Kong': 'HKD',
   'Asia/Macau': 'MOP',
-  'Asia/Taipei': 'TWD',
+  'Asia/Taipei': 'NTD',
 
   // Japan / Korea
   'Asia/Tokyo': 'JPY',
@@ -390,7 +390,7 @@ const LANGUAGE_TO_CURRENCY: Record<string, string> = {
   'KR': 'KRW',
   'CN': 'CNY',
   'HK': 'HKD',
-  'TW': 'TWD',
+  'TW': 'NTD',
   'IN': 'INR',
   'ID': 'IDR',
   'PH': 'PHP',

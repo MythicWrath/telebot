@@ -20,7 +20,11 @@ export async function getExchangeRates(): Promise<Record<string, number>> {
 
         if (data && data.rates) {
             console.log(`Using cached exchange rates for ${today}`);
-            return data.rates as Record<string, number>;
+            const rates = data.rates as Record<string, number>;
+            if (rates.TWD && !rates.NTD) {
+                rates.NTD = rates.TWD;
+            }
+            return rates;
         }
 
         // 2. We don't have them, or there was an error. Fetch from public API.
@@ -30,6 +34,11 @@ export async function getExchangeRates(): Promise<Record<string, number>> {
 
         if (response.data && response.data.rates) {
             const rates = response.data.rates;
+
+            // Alias NTD to TWD (New Taiwan Dollar)
+            if (rates.TWD && !rates.NTD) {
+                rates.NTD = rates.TWD;
+            }
 
             // 3. Cache the new rates in the database
             await supabase.from('exchange_rates').upsert({
@@ -46,7 +55,7 @@ export async function getExchangeRates(): Promise<Record<string, number>> {
     } catch (err) {
         console.error('Failed to get exchange rates:', err);
         // Fallback to 1:1 if everything fails so the app doesn't crash
-        return { 'SGD': 1 };
+        return { 'SGD': 1, 'NTD': 24, 'TWD': 24 };
     }
 }
 
@@ -57,8 +66,9 @@ export async function getExchangeRates(): Promise<Record<string, number>> {
 export function convertCurrency(amount: number, fromCurrency: string, toCurrency: string, rates: Record<string, number>): number {
     if (fromCurrency === toCurrency) return amount;
 
-    const sourceRate = rates[fromCurrency];
-    const targetRate = rates[toCurrency];
+    const normalize = (code: string) => (code === 'NTD' ? 'TWD' : code === 'TWD' ? 'NTD' : code);
+    const sourceRate = rates[fromCurrency] ?? rates[normalize(fromCurrency)];
+    const targetRate = rates[toCurrency] ?? rates[normalize(toCurrency)];
 
     if (!sourceRate || !targetRate) {
         console.warn(`Missing exchange rate for ${fromCurrency} or ${toCurrency}. Defaulting to 1:1`);

@@ -817,7 +817,14 @@ app.get('/api/currencies', async (req, res) => {
     try {
         const { getExchangeRates } = require('./currencies');
         const rates = await getExchangeRates();
-        const currencies = Object.keys(rates).sort();
+        const priorityCurrencies = ['SGD', 'NTD'];
+        const otherCurrencies = Object.keys(rates)
+            .filter(c => !priorityCurrencies.includes(c))
+            .sort();
+        const currencies = [
+            ...priorityCurrencies.filter(c => rates[c] !== undefined),
+            ...otherCurrencies
+        ];
         res.json({ currencies });
     } catch (error: any) {
         console.error('Failed to fetch currencies:', error);
