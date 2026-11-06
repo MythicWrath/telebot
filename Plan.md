@@ -29,3 +29,4 @@ I want to make a Telegram bot/miniapp that can split money between users. The bo
 - Refactoring of backend to separate business logic from platform-dependent code (e.g., Supabase) to enable easy platform switching in the future.
 - Editing of currently made expenses in a group. A notification message should be sent to the group when this is done.
 - A personal dashboard for expenses, maybe we can start with a simple list of groups and the total money that they owe or are owed in each expense group that they belong to? 
+- Add commands for using the bot (e.g. /split $300, /delete dinner)

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import WebApp from '@twa-dev/sdk'
 import axios from 'axios'
 import { guessUserCurrency } from './utils/currencyUtils'
@@ -37,6 +37,16 @@ function organizeCurrencies(currencies: string[]): string[] {
   return [...top, ...remaining];
 }
 
+interface BalanceItem {
+  id: number;
+  from: string;
+  fromId: number;
+  to: string;
+  toId: number;
+  amount: number;
+  currency: string;
+}
+
 function App() {
   const [activeTab, setActiveTab] = useState<'add' | 'expenses' | 'balances' | 'edit'>('add')
   const [amount, setAmount] = useState('')
@@ -55,7 +65,8 @@ function App() {
   const [members, setMembers] = useState<{ id: number, name: string }[]>([])
   const [isLoadingMembers, setIsLoadingMembers] = useState(false)
 
-  const [balances, setBalances] = useState<{ id: number, from: string, fromId: number, to: string, toId: number, amount: number, currency: string }[]>([])
+  const [balances, setBalances] = useState<BalanceItem[]>([])
+  const [selectedBalanceId, setSelectedBalanceId] = useState<number | null>(null)
   const [isLoadingBalances, setIsLoadingBalances] = useState(false)
 
   const [expensesList, setExpensesList] = useState<Expense[]>([])
@@ -121,53 +132,55 @@ function App() {
     fetchCurrencies();
   }, []);
 
+  // Fetch balances function
+  const fetchBalances = async () => {
+    setIsLoadingBalances(true);
+    try {
+      const groupId = WebApp.initDataUnsafe?.start_param || -100123456789;
+
+      const response = await axios.get(`${API_BASE_URL}/api/groups/${groupId}/balances`);
+      if (response.data && response.data.balances) {
+        setBalances(response.data.balances);
+      }
+    } catch (error: any) {
+      console.error("Failed to fetch balances", error);
+      const errorDetail = error.response?.data?.error || error.message;
+      showAlert(`Failed to fetch balances: ${errorDetail}`);
+    } finally {
+      setIsLoadingBalances(false);
+    }
+  };
+
   // Fetch balances when switching to the balances tab
   useEffect(() => {
-    const fetchBalances = async () => {
-      if (activeTab === 'balances') {
-        setIsLoadingBalances(true);
-        try {
-          const groupId = WebApp.initDataUnsafe?.start_param || -100123456789;
-
-          const response = await axios.get(`${API_BASE_URL}/api/groups/${groupId}/balances`);
-          if (response.data && response.data.balances) {
-            setBalances(response.data.balances);
-          }
-        } catch (error: any) {
-          console.error("Failed to fetch balances", error);
-          const errorDetail = error.response?.data?.error || error.message;
-          showAlert(`Failed to fetch balances: ${errorDetail}`);
-        } finally {
-          setIsLoadingBalances(false);
-        }
-      }
-    };
-
-    fetchBalances();
+    if (activeTab === 'balances') {
+      fetchBalances();
+    }
   }, [activeTab]);
+
+  // Fetch expenses function
+  const fetchExpenses = async () => {
+    setIsLoadingExpenses(true);
+    try {
+      const groupId = WebApp.initDataUnsafe?.start_param || -100123456789;
+      const response = await axios.get(`${API_BASE_URL}/api/groups/${groupId}/expenses`);
+      if (response.data && response.data.expenses) {
+        setExpensesList(response.data.expenses);
+      }
+    } catch (error: any) {
+      console.error("Failed to fetch expenses", error);
+      const errorDetail = error.response?.data?.error || error.message;
+      showAlert(`Failed to fetch expenses: ${errorDetail}`);
+    } finally {
+      setIsLoadingExpenses(false);
+    }
+  };
 
   // Fetch expenses when switching to the expenses tab
   useEffect(() => {
-    const fetchExpenses = async () => {
-      if (activeTab === 'expenses') {
-        setIsLoadingExpenses(true);
-        try {
-          const groupId = WebApp.initDataUnsafe?.start_param || -100123456789;
-          const response = await axios.get(`${API_BASE_URL}/api/groups/${groupId}/expenses`);
-          if (response.data && response.data.expenses) {
-            setExpensesList(response.data.expenses);
-          }
-        } catch (error: any) {
-          console.error("Failed to fetch expenses", error);
-          const errorDetail = error.response?.data?.error || error.message;
-          showAlert(`Failed to fetch expenses: ${errorDetail}`);
-        } finally {
-          setIsLoadingExpenses(false);
-        }
-      }
-    };
-
-    fetchExpenses();
+    if (activeTab === 'expenses') {
+      fetchExpenses();
+    }
   }, [activeTab]);
 
   const showAlert = (message: string) => {
@@ -178,12 +191,29 @@ function App() {
     }
   };
 
+  const showConfirm = (message: string): Promise<boolean> => {
+    return new Promise(resolve => {
+      if (WebApp.platform === 'unknown' || typeof (WebApp as any).showConfirm !== 'function') {
+        resolve(window.confirm(message));
+      } else {
+        try {
+          (WebApp as any).showConfirm(message, (confirmed: boolean) => {
+            resolve(confirmed);
+          });
+        } catch {
+          resolve(window.confirm(message));
+        }
+      }
+    });
+  };
+
   const resetForm = () => {
     setEditingExpenseId(null);
     setAmount('');
     setDescription('');
     setSplitType('EQUAL');
     setSplitValues({});
+    setSelectedBalanceId(null);
   };
 
   // Dynamic split calculations
@@ -284,7 +314,54 @@ function App() {
     return true;
   };
 
+  const handleSettleDebt = async (debtToSettle?: BalanceItem) => {
+    const target = debtToSettle || balances.find(b => b.id === selectedBalanceId);
+    if (!target) {
+      showAlert('Please select a debt from the list first.');
+      return;
+    }
+
+    const confirmed = await showConfirm(
+      `Confirm settlement:\n${target.from} pays ${target.to} ${target.currency || 'SGD'} ${target.amount.toFixed(2)}?`
+    );
+    if (!confirmed) return;
+
+    setIsLoading(true);
+    if (WebApp.platform !== 'unknown') {
+      WebApp.MainButton.showProgress();
+    }
+
+    try {
+      const groupId = WebApp.initDataUnsafe?.start_param || -100123456789;
+      await axios.post(`${API_BASE_URL}/api/settlements`, {
+        groupId: groupId,
+        paidBy: target.fromId,
+        paidTo: target.toId,
+        amount: target.amount,
+        currency: target.currency || 'SGD'
+      });
+
+      showAlert(`Settlement recorded! ${target.from} settled ${target.currency || 'SGD'} ${target.amount.toFixed(2)} with ${target.to}.`);
+      setSelectedBalanceId(null);
+      await fetchBalances();
+    } catch (error: any) {
+      console.error("Failed to settle debt", error);
+      const errorDetail = error.response?.data?.error || error.message;
+      showAlert(`Failed to settle debt: ${errorDetail}`);
+    } finally {
+      setIsLoading(false);
+      if (WebApp.platform !== 'unknown') {
+        WebApp.MainButton.hideProgress();
+      }
+    }
+  };
+
   const handleMainButtonClick = async () => {
+    if (activeTab === 'balances') {
+      await handleSettleDebt();
+      return;
+    }
+
     if (!isFormValid()) return;
     const finalSplits = computeFinalSplits();
 
@@ -300,7 +377,7 @@ function App() {
           amount: amount,
           currency: currency,
           description: description,
-          groupId: WebApp.initDataUnsafe?.start_param || null,
+          groupId: WebApp.initDataUnsafe?.start_param || -100123456789,
           paidBy: paidBy,
           splitWith: splitWith,
           splits: finalSplits
@@ -350,13 +427,12 @@ function App() {
           WebApp.MainButton.hideProgress();
         }
       }
-    } else {
-      showAlert('Settle up functionality coming soon!');
     }
   };
 
   const handleDeleteExpense = async (expenseId: string) => {
-    if (!window.confirm("Are you sure you want to delete this expense?")) {
+    const confirmed = await showConfirm("Are you sure you want to delete this expense?");
+    if (!confirmed) {
       return;
     }
     setIsLoading(true);
@@ -373,13 +449,19 @@ function App() {
     }
   };
 
+  const handleMainButtonClickRef = useRef(handleMainButtonClick);
+  handleMainButtonClickRef.current = handleMainButtonClick;
+
   useEffect(() => {
     WebApp.ready();
-    WebApp.MainButton.onClick(handleMainButtonClick);
-    return () => {
-      WebApp.MainButton.offClick(handleMainButtonClick);
+    const onMainBtnClick = () => {
+      handleMainButtonClickRef.current();
     };
-  }, [activeTab, amount, currency, description, paidBy, splitWith, splitType, splitValues, isLoading, editingExpenseId]);
+    WebApp.MainButton.onClick(onMainBtnClick);
+    return () => {
+      WebApp.MainButton.offClick(onMainBtnClick);
+    };
+  }, []);
 
   useEffect(() => {
     if (activeTab === 'add' || activeTab === 'edit') {
@@ -390,12 +472,17 @@ function App() {
         WebApp.MainButton.hide();
       }
     } else if (activeTab === 'balances') {
-      WebApp.MainButton.setText('Settle Selected Debt');
-      WebApp.MainButton.show();
+      const selectedBalance = balances.find(b => b.id === selectedBalanceId);
+      if (selectedBalance) {
+        WebApp.MainButton.setText(`Settle ${selectedBalance.currency || 'SGD'} ${selectedBalance.amount.toFixed(2)}`);
+        WebApp.MainButton.show();
+      } else {
+        WebApp.MainButton.hide();
+      }
     } else {
       WebApp.MainButton.hide();
     }
-  }, [activeTab, amount, description, paidBy, splitWith, splitType, splitValues]);
+  }, [activeTab, amount, description, paidBy, splitWith, splitType, splitValues, selectedBalanceId, balances]);
 
   const currentUserId = WebApp.initDataUnsafe?.user?.id;
   let totalIOwe = 0;
@@ -746,7 +833,14 @@ function App() {
       {/* View: Balances */}
       {activeTab === 'balances' && (
         <div className="flex flex-col gap-3">
-          <h2 className="text-sm font-semibold opacity-80 uppercase tracking-wide mb-1">Debts to Settle</h2>
+          <div className="flex items-center justify-between mb-1">
+            <h2 className="text-sm font-semibold opacity-80 uppercase tracking-wide">Debts to Settle</h2>
+            {balances.length > 0 && (
+              <span className="text-xs opacity-60">
+                {selectedBalanceId !== null ? '1 debt selected' : 'Tap to select a debt'}
+              </span>
+            )}
+          </div>
 
           {isLoadingBalances && (
             <div className="text-center py-8 opacity-60 text-sm">Loading balances calculated by algorithm...</div>
@@ -756,23 +850,105 @@ function App() {
             <div className="text-center py-8 opacity-60 text-sm">Everyone is settled up! Zero pending debts.</div>
           )}
 
-          {!isLoadingBalances && balances.map(balance => (
-            <div key={balance.id} className="flex items-center justify-between bg-[var(--tg-theme-secondary-bg-color,#f4f4f5)] p-4 rounded-xl">
-              <div className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded-full bg-blue-500/10 flex items-center justify-center text-blue-500">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                </div>
-                <div>
-                  <div className="font-medium text-sm">
-                    {balance.from} <span className="opacity-60 font-normal">owes</span> {balance.to}
+          {!isLoadingBalances && balances.map(balance => {
+            const isSelected = selectedBalanceId === balance.id;
+            const isPayer = balance.fromId === currentUserId;
+            const isReceiver = balance.toId === currentUserId;
+
+            return (
+              <div
+                key={balance.id}
+                role="button"
+                tabIndex={0}
+                onClick={() => {
+                  setSelectedBalanceId(prev => prev === balance.id ? null : balance.id);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    setSelectedBalanceId(prev => prev === balance.id ? null : balance.id);
+                  }
+                }}
+                className={`flex flex-col gap-3 p-4 rounded-xl cursor-pointer transition-all select-none border-2 ${isSelected
+                    ? 'border-blue-500 bg-blue-50/70 dark:bg-blue-950/40 shadow-sm ring-1 ring-blue-500'
+                    : 'border-transparent bg-[var(--tg-theme-secondary-bg-color,#f4f4f5)] hover:border-gray-300 dark:hover:border-zinc-700 active:scale-[0.99]'
+                  }`}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    {/* Selection Radio / Checkbox Indicator */}
+                    <div
+                      className={`w-6 h-6 rounded-full flex items-center justify-center transition-all shrink-0 ${isSelected
+                          ? 'bg-blue-500 text-white shadow-sm'
+                          : 'border-2 border-gray-400/50 text-transparent'
+                        }`}
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="20 6 9 17 4 12"></polyline>
+                      </svg>
+                    </div>
+
+                    <div className="text-left">
+                      <div className="font-semibold text-sm flex items-center gap-1.5 flex-wrap">
+                        <span className="text-[var(--tg-theme-text-color,#000000)]">{balance.from}</span>
+                        <span className="opacity-50 font-normal text-xs">owes</span>
+                        <span className="text-[var(--tg-theme-text-color,#000000)]">{balance.to}</span>
+                      </div>
+                      <div className="flex items-center gap-1.5 mt-1">
+                        {isPayer && (
+                          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-600 dark:text-amber-400">
+                            You owe
+                          </span>
+                        )}
+                        {isReceiver && (
+                          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
+                            Owed to you
+                          </span>
+                        )}
+                        {!isPayer && !isReceiver && (
+                          <span className="text-[10px] opacity-50">
+                            Group debt
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="text-right shrink-0">
+                    <div className="font-bold text-lg text-[var(--tg-theme-text-color,#000000)]">
+                      {balance.currency || 'SGD'} {balance.amount.toFixed(2)}
+                    </div>
+                    {isSelected && (
+                      <span className="text-[11px] font-medium text-blue-500">
+                        Selected
+                      </span>
+                    )}
                   </div>
                 </div>
+
+                {/* Inline Quick Action when selected */}
+                {isSelected && (
+                  <div className="flex items-center justify-between pt-2.5 border-t border-blue-200/60 dark:border-blue-900/50">
+                    <span className="text-xs opacity-75">
+                      Mark this debt as fully paid
+                    </span>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleSettleDebt(balance);
+                      }}
+                      disabled={isLoading}
+                      className="px-3 py-1.5 bg-blue-500 hover:bg-blue-600 active:scale-95 text-white text-xs font-semibold rounded-lg shadow-sm transition-all border-none cursor-pointer flex items-center gap-1.5"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                      <span>Settle Now</span>
+                    </button>
+                  </div>
+                )}
               </div>
-              <div className="font-bold text-lg">
-                ${balance.amount.toFixed(2)}
-              </div>
-            </div>
-          ))}
+            );
+          })}
 
           {!isLoadingBalances && balances.length > 0 && (
             <div className="mt-2 p-4 bg-green-500/10 rounded-xl flex items-center gap-3 text-green-700 dark:text-green-400">
@@ -791,10 +967,16 @@ function App() {
       {WebApp.platform === 'unknown' && (
         <button
           onClick={handleMainButtonClick}
-          disabled={!isFormValid() && (activeTab === 'add' || activeTab === 'edit')}
-          className={`w-full py-3 rounded-xl font-bold text-white mb-2 transition-opacity border-none cursor-pointer ${(activeTab === 'add' || activeTab === 'edit') && !isFormValid()
-            ? 'bg-blue-300 cursor-not-allowed'
-            : 'bg-blue-500 hover:bg-blue-600'
+          disabled={
+            isLoading ||
+            ((activeTab === 'add' || activeTab === 'edit') && !isFormValid()) ||
+            (activeTab === 'balances' && selectedBalanceId === null)
+          }
+          className={`w-full py-3 rounded-xl font-bold text-white mb-2 transition-all border-none cursor-pointer ${isLoading ||
+              ((activeTab === 'add' || activeTab === 'edit') && !isFormValid()) ||
+              (activeTab === 'balances' && selectedBalanceId === null)
+              ? 'bg-blue-300 dark:bg-blue-900/40 text-blue-100 cursor-not-allowed opacity-70'
+              : 'bg-blue-500 hover:bg-blue-600 active:scale-[0.99]'
             }`}
         >
           {isLoading
@@ -803,7 +985,14 @@ function App() {
               ? 'Split Expense'
               : activeTab === 'edit'
                 ? 'Save Changes'
-                : 'Settle Selected Debt'
+                : selectedBalanceId !== null
+                  ? (() => {
+                    const sel = balances.find(b => b.id === selectedBalanceId);
+                    return sel
+                      ? `Settle ${sel.currency || 'SGD'} ${sel.amount.toFixed(2)} (${sel.from} → ${sel.to})`
+                      : 'Settle Selected Debt';
+                  })()
+                  : 'Select a Debt to Settle'
           }
         </button>
       )}

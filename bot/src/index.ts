@@ -366,9 +366,12 @@ bot.command('split', async (ctx) => {
 
     ctx.reply(
         `💵 *Tele Split Money*\n\n` +
-        `Ready to split expenses in this group chat? Click the button below to open the Mini App!\n\n` +
-        `💡 _Tip: Use \`/split <amount>\` to instantly add an expense without opening the app._\n` +
-        `💡 _If group members are missing from the app, use /sync to register everyone._`,
+        `*Quick-add an expense without opening the app:*\n` +
+        `• \`/split 300\` — enter amount first, bot asks for the name\n` +
+        `• \`/split Dinner\` — enter name first, bot asks for the amount\n` +
+        `• \`/split 300 USD\` — specify a currency too\n\n` +
+        `_💡 Tip: type the full command with arguments before hitting send!_\n\n` +
+        `Or tap the button below to open the full Mini App 👇`,
         {
             parse_mode: 'Markdown',
             reply_markup: {
@@ -1229,9 +1232,17 @@ app.post('/api/settlements', validateTelegramInitData, requireGroupAccess, async
         if (settlementError) throw settlementError;
 
         try {
+            const { data: usersData } = await supabase
+                .from('users')
+                .select('telegram_id, first_name')
+                .in('telegram_id', [Number(paidBy), Number(paidTo)]);
+
+            const payer = usersData?.find((u: any) => u.telegram_id === Number(paidBy))?.first_name || 'Someone';
+            const payee = usersData?.find((u: any) => u.telegram_id === Number(paidTo))?.first_name || 'Someone';
+
             await bot.telegram.sendMessage(
                 groupId,
-                `Debt Settled: ${currency || 'SGD'} ${amount} paid.`
+                `🤝 Debt Settled: ${payer} paid ${payee} ${currency || 'SGD'} ${parseFloat(amount).toFixed(2)}`
             );
         } catch (e) {
             console.log('Could not send telegram message:', e);
